@@ -72,12 +72,15 @@ class FakeAsyncClient:
         return FakeResponse(payload)
 
 
-def reload_modules(monkeypatch, tmp_path: Path):
+def reload_modules(monkeypatch, tmp_path: Path, *, groq_api_key: str | None = "test-groq-key"):
     """Reload the local standalone app package against a temporary SQLite file."""
 
     db_path = tmp_path / "llm-comparator-test.db"
     monkeypatch.chdir(PROJECT_ROOT)
-    monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
+    if groq_api_key is None:
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("GROQ_API_KEY", groq_api_key)
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://fake-ollama")
     monkeypatch.setenv("DB_URL", f"sqlite+aiosqlite:///{db_path}")
 
@@ -222,6 +225,34 @@ def test_compare_runs_all_backends_concurrently(monkeypatch, tmp_path) -> None:
     assert response.status_code == 200
     assert len(FakeAsyncClient.calls) == 4
     assert elapsed < 0.18
+
+
+def test_compare_defaults_to_ollama_backends_when_groq_key_missing(monkeypatch, tmp_path) -> None:
+    """The compare endpoint should default to local Ollama backends when Groq is unset."""
+
+    main_module, _, _, generate_module, _ = reload_modules(monkeypatch, tmp_path, groq_api_key=None)
+    FakeAsyncClient.reset()
+    configure_success_payloads()
+    monkeypatch.setattr(generate_module.httpx, "AsyncClient", FakeAsyncClient)
+
+    with TestClient(main_module.app) as client:
+        response = client.post(
+            "/generate/compare",
+            json={
+                "theme_name": "Local Only",
+                "tone_funny_pct": 50,
+                "tone_emotion_pct": 50,
+                "prompt_keywords": ["local"],
+                "visual_style": "simple",
+                "count": 1,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["results"]) == 3
+    assert all(item["backend"] != "groq" for item in payload["results"])
+    assert len(FakeAsyncClient.calls) == 3
 
 
 def test_single_endpoint_returns_phrases(monkeypatch, tmp_path) -> None:

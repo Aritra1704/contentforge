@@ -23,19 +23,30 @@ router = APIRouter(prefix="/generate", tags=["generate"])
 
 BackendName = Literal["groq", "ollama_qwen25", "ollama_llama31", "ollama_mistral"]
 
-DEFAULT_BACKENDS: list[BackendName] = [
-    "groq",
+OLLAMA_BACKENDS: list[BackendName] = [
     "ollama_qwen25",
     "ollama_llama31",
     "ollama_mistral",
 ]
 
-BACKEND_MODELS: dict[BackendName, str] = {
-    "groq": "llama-3.3-70b-versatile",
-    "ollama_qwen25": "qwen2.5:7b-instruct",
-    "ollama_llama31": "llama3.1:8b",
-    "ollama_mistral": "mistral:7b",
-}
+
+def default_backends() -> list[BackendName]:
+    """Return the default backend set for a comparison request."""
+
+    if settings.groq_api_key.strip():
+        return ["groq", *OLLAMA_BACKENDS]
+    return list(OLLAMA_BACKENDS)
+
+
+def backend_models() -> dict[BackendName, str]:
+    """Resolve configured model names for each backend from settings."""
+
+    return {
+        "groq": settings.groq_model,
+        "ollama_qwen25": settings.ollama_qwen25_model,
+        "ollama_llama31": settings.ollama_llama31_model,
+        "ollama_mistral": settings.ollama_mistral_model,
+    }
 
 SYSTEM_PROMPT = (
     "You are a professional greeting card copywriter specializing in emotionally "
@@ -54,7 +65,7 @@ class CompareRequest(BaseModel):
     visual_style: str
     event_name: str | None = None
     count: int = Field(default=5, ge=1, le=10)
-    backends: list[BackendName] = Field(default_factory=lambda: list(DEFAULT_BACKENDS))
+    backends: list[BackendName] = Field(default_factory=default_backends)
 
 
 class SingleRequest(BaseModel):
@@ -242,11 +253,13 @@ async def call_backend(
 ) -> tuple[dict[str, Any], str]:
     """Call one configured backend and return the raw response plus model name."""
 
-    model_name = BACKEND_MODELS[backend]
+    model_name = backend_models()[backend]
     timeout = httpx.Timeout(60.0)
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         if backend == "groq":
+            if not settings.groq_api_key.strip():
+                raise RuntimeError("GROQ_API_KEY is not configured")
             response = await client.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={
@@ -294,7 +307,7 @@ async def execute_generation(
 
     started_at = perf_counter()
     target_tone = expected_tone(tone_funny_pct, tone_emotion_pct)
-    model_name = BACKEND_MODELS[backend]
+    model_name = backend_models()[backend]
 
     try:
         raw_payload, model_name = await call_backend(

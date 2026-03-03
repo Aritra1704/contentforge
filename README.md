@@ -5,7 +5,7 @@ Standalone FastAPI application for running the same ecard prompt against multipl
 ## Features
 
 - FastAPI API with async SQLite persistence
-- Concurrent comparison across `groq`, `ollama_qwen25`, `ollama_llama31`, and `ollama_mistral`
+- Concurrent comparison across configurable Groq and Ollama backends
 - Stored results with run summaries, per-run detail, CSV export, and aggregate stats
 - No PostgreSQL or external migrations required
 
@@ -19,7 +19,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Set `GROQ_API_KEY` in `.env`. `OLLAMA_BASE_URL` defaults to `http://localhost:11434`.
+Set `GROQ_API_KEY` in `.env` if you want the Groq backend enabled. Without it, `/generate/compare` defaults to the configured Ollama backends for local runs.
 
 ## Run
 
