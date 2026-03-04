@@ -1,64 +1,110 @@
 # LLM Comparator
 
-Standalone FastAPI application for running the same ecard prompt against multiple LLM backends and storing the outputs for side-by-side comparison.
+Stateless FastAPI service for lightweight content generation across local Ollama chat models and an optional Groq backend. It is designed to be called by other apps such as TinySe or ecard factory, one request per backend/model, with explicit busy handling instead of any DB-backed queue.
 
 ## Features
 
-- FastAPI API with async SQLite persistence
-- Concurrent comparison across configurable Groq and Ollama backends
-- Stored results with run summaries, per-run detail, CSV export, and aggregate stats
-- No PostgreSQL or external migrations required
+- Stateless API with no SQLite or persistent storage
+- Ollama-first generation flow for `mistral:7b`, `qwen2.5:7b-instruct`, and `llama3.1:8b`
+- Embedding-model rejection for chat requests
+- In-memory concurrency guard with `429 busy` responses and `Retry-After`
+- Discovery and health endpoints for callers that need to probe readiness
 
 ## Setup
 
+Use Python 3.12 or 3.13.
+
 ```bash
 cd llm-comparator
-python3 -m venv venv
+python3.13 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 cp .env.example .env
 ```
-
-Set `GROQ_API_KEY` in `.env` if you want the Groq backend enabled. Without it, `/generate/compare` defaults to the configured Ollama backends for local runs.
 
 ## Run
 
 ```bash
-uvicorn app.main:app --reload
+source venv/bin/activate
+python -m uvicorn app.main:app --reload
 ```
 
-The app creates `llm_comparator.db` automatically on startup.
+## Config
 
-## Test
+Relevant env vars are defined in [.env.example](/Users/aritrarpal/Documents/workspace_biz/llm-comparator/.env.example):
 
-```bash
-pytest tests/ -v
-```
+- `OLLAMA_URL`
+- `OLLAMA_CHAT_MODELS`
+- `OLLAMA_EMBEDDING_MODELS`
+- `MAX_CONCURRENT_JOBS`
+- `MAX_QUEUE`
+- `BUSY_RETRY_AFTER_MS`
+- `REQUEST_TIMEOUT_SEC`
+- `GROQ_API_KEY`
+- `GROQ_MODEL`
 
 ## Endpoints
 
-### Root
+- `GET /health`
+- `GET /models`
+- `POST /generate/single`
 
-```bash
-curl http://127.0.0.1:8000/
+### Create content
+
+Primary endpoint:
+
+```text
+POST /generate/single
 ```
 
-### Compare multiple backends
+Request body:
 
-```bash
-curl -X POST http://127.0.0.1:8000/generate/compare \
-  -H "Content-Type: application/json" \
-  -d '{
-    "theme_name": "Motivational Monday",
-    "tone_funny_pct": 30,
-    "tone_emotion_pct": 70,
-    "prompt_keywords": ["strength", "monday", "energy"],
-    "visual_style": "minimal sunrise",
-    "count": 3
-  }'
+```json
+{
+  "theme_name": "Warm Wishes",
+  "tone_funny_pct": 20,
+  "tone_emotion_pct": 70,
+  "prompt_keywords": ["family", "gratitude"],
+  "visual_style": "soft watercolor",
+  "backend": "ollama",
+  "model": "qwen2.5:7b-instruct",
+  "count": 3,
+  "max_tokens": 300,
+  "temperature": 0.8,
+  "trace_id": "tinyse-run-001"
+}
 ```
 
-### Run one backend only
+Successful response:
+
+```json
+{
+  "ok": true,
+  "backend": "ollama",
+  "model": "qwen2.5:7b-instruct",
+  "items": ["...", "...", "..."],
+  "meta": {
+    "latency_ms": 1234,
+    "request_id": "generated-request-id",
+    "trace_id": "tinyse-run-001",
+    "busy": false
+  }
+}
+```
+
+### Health
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+### Model discovery
+
+```bash
+curl http://127.0.0.1:8000/models
+```
+
+### Generate with Qwen
 
 ```bash
 curl -X POST http://127.0.0.1:8000/generate/single \
@@ -69,31 +115,82 @@ curl -X POST http://127.0.0.1:8000/generate/single \
     "tone_emotion_pct": 70,
     "prompt_keywords": ["family", "gratitude"],
     "visual_style": "soft watercolor",
-    "backend": "groq",
-    "count": 3
+    "backend": "ollama",
+    "model": "qwen2.5:7b-instruct",
+    "count": 3,
+    "max_tokens": 300,
+    "temperature": 0.8,
+    "trace_id": "tinyse-run-001"
   }'
 ```
 
-### List stored runs
+### Generate with Mistral
 
 ```bash
-curl http://127.0.0.1:8000/results/runs
+curl -X POST http://127.0.0.1:8000/generate/single \
+  -H "Content-Type: application/json" \
+  -d '{
+    "theme_name": "Warm Wishes",
+    "tone_funny_pct": 20,
+    "tone_emotion_pct": 70,
+    "prompt_keywords": ["family", "gratitude"],
+    "visual_style": "soft watercolor",
+    "backend": "ollama",
+    "model": "mistral:7b",
+    "count": 3,
+    "max_tokens": 300,
+    "temperature": 0.8
+  }'
 ```
 
-### View one run
+### Generate with Llama 3.1
 
 ```bash
-curl http://127.0.0.1:8000/results/runs/<run_id>
+curl -X POST http://127.0.0.1:8000/generate/single \
+  -H "Content-Type: application/json" \
+  -d '{
+    "theme_name": "Warm Wishes",
+    "tone_funny_pct": 20,
+    "tone_emotion_pct": 70,
+    "prompt_keywords": ["family", "gratitude"],
+    "visual_style": "soft watercolor",
+    "backend": "ollama",
+    "model": "llama3.1:8b",
+    "count": 3,
+    "max_tokens": 300,
+    "temperature": 0.8
+  }'
 ```
 
-### Export one run as CSV
+### Busy response example
+
+If all job slots are occupied, the service returns `429`:
+
+```json
+{
+  "ok": false,
+  "error": "busy",
+  "retry_after_ms": 2000,
+  "meta": {
+    "busy": true
+  }
+}
+```
+
+It also includes the header `Retry-After: 2`.
+
+## Minimal test plan
+
+Run the automated tests:
 
 ```bash
-curl -OJ http://127.0.0.1:8000/results/runs/<run_id>/export
+pytest tests/ -v
 ```
 
-### Aggregate stats
+Manual curl checks:
 
-```bash
-curl http://127.0.0.1:8000/results/stats
-```
+1. Call `POST /generate/single` with `model = "qwen2.5:7b-instruct"`.
+2. Call `POST /generate/single` with `model = "mistral:7b"`.
+3. Call `POST /generate/single` with `model = "llama3.1:8b"`.
+4. Call `POST /generate/single` with `model = "nomic-embed-text:latest"` and confirm `400`.
+5. Fire two requests quickly and confirm the second returns `429` with `Retry-After: 2`.
