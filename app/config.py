@@ -25,6 +25,7 @@ class Settings(BaseSettings):
 
     service_name: str = "llm-comparator"
     service_version: str = Field(default="dev", validation_alias="SERVICE_VERSION")
+    log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
 
     groq_api_key: str = Field(default="", validation_alias="GROQ_API_KEY")
     groq_model: str = Field(default="llama-3.3-70b-versatile", validation_alias="GROQ_MODEL")

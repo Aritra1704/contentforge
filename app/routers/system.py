@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from app.config import settings
-from app.llm import UpstreamServiceError, fetch_ollama_catalog, is_ollama_reachable
+from app.llm import fetch_ollama_catalog, is_ollama_reachable
 from app.routers.generate import busy_manager
 from app.schemas import HealthResponse, ModelDiscoveryResponse, OllamaModelCatalog
 
@@ -30,11 +30,7 @@ async def health() -> HealthResponse:
 async def models() -> ModelDiscoveryResponse:
     """List chat and embedding models exposed by Ollama."""
 
-    try:
-        chat_models, embedding_models = await fetch_ollama_catalog()
-    except UpstreamServiceError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
-
+    chat_models, embedding_models = await fetch_ollama_catalog()
     return ModelDiscoveryResponse(
         ok=True,
         ollama=OllamaModelCatalog(
