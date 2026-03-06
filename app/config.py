@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from typing import Literal
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -47,6 +48,30 @@ class Settings(BaseSettings):
     max_queue: int = Field(default=0, validation_alias="MAX_QUEUE", ge=0)
     busy_retry_after_ms: int = Field(default=2000, validation_alias="BUSY_RETRY_AFTER_MS", ge=1)
     request_timeout_sec: float = Field(default=120.0, validation_alias="REQUEST_TIMEOUT_SEC", gt=0)
+    judge_enabled: bool = Field(default=False, validation_alias="JUDGE_ENABLED")
+    judge_provider: Literal["openai", "ollama"] = Field(
+        default="ollama",
+        validation_alias=AliasChoices("JUDGE_PROVIDER", "JUDGE_BACKEND"),
+    )
+    judge_model: str = Field(default="qwen2.5:7b-instruct", validation_alias="JUDGE_MODEL")
+    openai_judge_enabled: bool = Field(default=False, validation_alias="OPENAI_JUDGE_ENABLED")
+    openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
+    openai_judge_model: str = Field(default="gpt-4o-mini", validation_alias="OPENAI_JUDGE_MODEL")
+    judge_mode: Literal["tie_break", "always"] = Field(
+        default="tie_break",
+        validation_alias="JUDGE_MODE",
+    )
+    judge_tie_threshold: int = Field(default=7, validation_alias="JUDGE_TIE_THRESHOLD", ge=0)
+    quality_memory_enabled: bool = Field(default=False, validation_alias="QUALITY_MEMORY_ENABLED")
+    quality_memory_dsn: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "QUALITY_MEMORY_DSN",
+            "POSTGRES_DSN",
+            "DATABASE_URL",
+            "DB_URL",
+        ),
+    )
 
     @property
     def ollama_chat_models(self) -> list[str]:

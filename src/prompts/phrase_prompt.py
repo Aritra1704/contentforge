@@ -1,8 +1,8 @@
-"""Phrase generation prompt builders."""
+"""Format-first prompt builders for generation requests."""
 
 from __future__ import annotations
 
-from app.schemas import GenerateSingleRequest
+from app.schemas import GenerateSingleRequest, OutputSpec
 
 
 def tone_direction(tone_funny_pct: int, tone_emotion_pct: int) -> str:
@@ -19,53 +19,127 @@ def tone_direction(tone_funny_pct: int, tone_emotion_pct: int) -> str:
     return "Balanced and clean conversational tone."
 
 
-def build_system_prompt() -> str:
-    """Return non-negotiable generation constraints."""
+def format_template(spec: OutputSpec) -> str:
+    """Return the explicit template block for one output format."""
+
+    if spec.format == "one_liner":
+        lines = spec.structure.items or 3
+        numbering_allowed = not bool(spec.structure.no_numbering)
+        numbering_rule = "numbering allowed" if numbering_allowed else "no numbering"
+        return (
+            f"Template: one_liner\n"
+            f"- Return exactly {lines} lines.\n"
+            f"- Use one line per item; {numbering_rule}.\n"
+            "- No JSON."
+        )
+
+    if spec.format == "paragraph":
+        return (
+            "Template: paragraph\n"
+            "- Return a single paragraph.\n"
+            "- Use 3 to 6 sentences.\n"
+            "- Plain text only."
+        )
+
+    if spec.format == "one_page":
+        return (
+            "Template: one_page\n"
+            "- Return 2 to 4 short paragraphs.\n"
+            "- Headings are optional.\n"
+            "- Plain text only."
+        )
+
+    if spec.format == "pros_cons":
+        items_per_section = spec.structure.items or 4
+        return (
+            "Template: pros_cons\n"
+            '- Return exactly two sections: "Pros:" and "Cons:".\n'
+            f"- Use exactly {items_per_section} bullet points per section.\n"
+            "- No extra text before or after sections."
+        )
+
+    if spec.format == "verse":
+        min_lines = spec.structure.items or 8
+        max_lines = spec.structure.max_lines or 12
+        return (
+            "Template: verse\n"
+            f"- Return {min_lines} to {max_lines} lines only.\n"
+            "- No paragraph blocks.\n"
+            "- No title unless explicitly requested."
+        )
 
     return (
-        "You are a production copywriting assistant for short greeting phrases.\n"
+        "Template: story\n"
+        "- Return a short story in exactly 3 sections.\n"
+        "- Section headers must be: Setup, Turn, Resolution.\n"
+        "- Plain text only."
+    )
+
+
+def length_constraints(spec: OutputSpec) -> list[str]:
+    """Return normalized length constraints as human-readable lines."""
+
+    lines: list[str] = []
+    if spec.length.min_words is not None:
+        lines.append(f"- Minimum words: {spec.length.min_words}.")
+    if spec.length.max_words is not None:
+        lines.append(f"- Maximum words: {spec.length.max_words}.")
+    if spec.length.target_words is not None:
+        lines.append(f"- Target words: {spec.length.target_words}.")
+    if spec.structure.max_words_per_line is not None:
+        lines.append(f"- Max words per line: {spec.structure.max_words_per_line}.")
+    return lines
+
+
+def build_system_prompt() -> str:
+    """Return global hard constraints for all formats and backends."""
+
+    return (
+        "You are a production copywriting assistant.\n"
         "Hard rules:\n"
-        "- Return only the requested phrases and nothing else.\n"
-        "- Never return JSON, markdown, XML, code blocks, labels, or explanations.\n"
-        "- Keep each phrase concise, natural, and human-sounding.\n"
-        "- Respect user constraints for count, word limits, emoji policy, and style."
+        "- Return only requested output content.\n"
+        "- Never return JSON, markdown, XML, labels, or explanations.\n"
+        "- Never prefix output with 'Sure' or 'Here's'.\n"
+        "- Keep wording natural and readable.\n"
+        "- Respect all format and policy constraints exactly."
     )
 
 
 def build_guidelines_prompt(payload: GenerateSingleRequest) -> str:
-    """Return policy and style guidance derived from request options."""
+    """Return format-first policy and style guidance."""
 
+    spec = payload.output_spec or OutputSpec()
     emoji_instruction = {
         "none": "Do not use emojis.",
-        "light": "Use at most one subtle emoji per phrase when it helps tone.",
-        "expressive": "Emojis are allowed when natural, but keep readability first.",
+        "light": "Use at most one subtle emoji where natural.",
+        "expressive": "Emojis are allowed where natural.",
     }[payload.emoji_policy]
 
-    format_instruction = {
-        "lines": "Output as plain lines without numbering.",
-        "numbered": "Output as a numbered list with one phrase per line.",
-    }[payload.output_format]
-
-    avoid_fragment = "Avoid common cliches."
+    avoid_instruction = "Avoid common cliches."
     if payload.avoid_cliches:
         banned = ", ".join(payload.avoid_phrases) if payload.avoid_phrases else "none provided"
-        avoid_fragment = f"Avoid cliches and avoid these phrases exactly: {banned}."
+        avoid_instruction = f"Avoid cliches and avoid these exact phrases: {banned}."
+
+    length_lines = "\n".join(length_constraints(spec)) or "- No explicit length override."
 
     return (
         "GUIDELINES\n"
         f"- Tone direction: {tone_direction(payload.tone_funny_pct, payload.tone_emotion_pct)}\n"
         f"- Tone style: {payload.tone_style}\n"
         f"- Audience: {payload.audience}\n"
-        f"- Maximum words per phrase: {payload.max_words}\n"
         f"- Emoji policy: {emoji_instruction}\n"
-        f"- {avoid_fragment}\n"
-        f"- {format_instruction}\n"
-        "- Do not repeat near-duplicate phrases."
+        f"- {avoid_instruction}\n"
+        "- Must not return JSON.\n"
+        "- Must not prefix with 'Sure' or 'Here's'.\n"
+        "- Format template:\n"
+        f"{format_template(spec)}\n"
+        "- Length constraints:\n"
+        f"{length_lines}"
     )
 
 
 def build_user_prompt(payload: GenerateSingleRequest) -> str:
-    """Return the concrete phrase-generation task."""
+    """Return task-level request data."""
 
     keywords = ", ".join(payload.prompt_keywords) if payload.prompt_keywords else "none"
     return (
@@ -73,13 +147,12 @@ def build_user_prompt(payload: GenerateSingleRequest) -> str:
         f"Theme: {payload.theme_name}\n"
         f"Visual style: {payload.visual_style}\n"
         f"Keywords to include naturally when helpful: {keywords}\n"
-        f"Generate exactly {payload.count} phrases.\n"
-        "Each phrase must be a standalone phrase suitable for social sharing."
+        "Output plain text only."
     )
 
 
 def build_messages(payload: GenerateSingleRequest) -> list[dict[str, str]]:
-    """Return a 3-layer prompt sequence (SYSTEM + GUIDELINES + USER TASK)."""
+    """Return SYSTEM + USER messages with all generation constraints."""
 
     user_content = "\n\n".join(
         [

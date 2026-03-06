@@ -73,6 +73,8 @@ def sanitize_details(value: Any) -> Any:
 
     if isinstance(value, str):
         return sanitize_text(value)
+    if isinstance(value, BaseException):
+        return sanitize_text(str(value))
     if isinstance(value, dict):
         return {str(key): sanitize_details(item) for key, item in value.items()}
     if isinstance(value, list):

@@ -122,6 +122,14 @@ def reload_app(
     groq_api_key: str | None = "test-groq-key",
     max_concurrent_jobs: str = "1",
     max_queue: str = "0",
+    judge_enabled: str = "false",
+    judge_mode: str = "tie_break",
+    judge_provider: str = "ollama",
+    judge_model: str = "qwen2.5:7b-instruct",
+    openai_judge_enabled: str = "false",
+    openai_api_key: str = "",
+    openai_judge_model: str = "gpt-4o-mini",
+    judge_tie_threshold: str = "7",
 ):
     """Reload the app package against a clean environment snapshot."""
 
@@ -135,6 +143,17 @@ def reload_app(
     monkeypatch.setenv("MAX_QUEUE", max_queue)
     monkeypatch.setenv("BUSY_RETRY_AFTER_MS", "2000")
     monkeypatch.setenv("REQUEST_TIMEOUT_SEC", "120")
+    monkeypatch.setenv("JUDGE_ENABLED", judge_enabled)
+    monkeypatch.setenv("JUDGE_MODE", judge_mode)
+    monkeypatch.setenv("JUDGE_PROVIDER", judge_provider)
+    monkeypatch.setenv("JUDGE_BACKEND", judge_provider)
+    monkeypatch.setenv("JUDGE_MODEL", judge_model)
+    monkeypatch.setenv("OPENAI_JUDGE_ENABLED", openai_judge_enabled)
+    monkeypatch.setenv("OPENAI_API_KEY", openai_api_key)
+    monkeypatch.setenv("OPENAI_JUDGE_MODEL", openai_judge_model)
+    monkeypatch.setenv("JUDGE_TIE_THRESHOLD", judge_tie_threshold)
+    monkeypatch.setenv("QUALITY_MEMORY_ENABLED", "false")
+    monkeypatch.setenv("QUALITY_MEMORY_DSN", "")
 
     if groq_api_key is None:
         monkeypatch.setenv("GROQ_API_KEY", "")
@@ -422,6 +441,92 @@ async def test_generate_single_enforces_max_words(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_single_strips_forbidden_prefixes_without_failing(monkeypatch) -> None:
+    """Hard-preface text should be cleaned during fallback, not returned as 502."""
+
+    main_module, llm_module = reload_app(monkeypatch)
+    FakeAsyncClient.reset()
+    configure_default_payloads()
+    FakeAsyncClient.post_payloads["qwen2.5:7b-instruct"] = [
+        {
+            "message": {
+                "content": "\n".join(
+                    [
+                        "Sure, keep focus and move calmly today",
+                        "Here's protect energy and stay clear now",
+                        "Heres start strong and stay steady always",
+                    ]
+                )
+            }
+        },
+        {
+            "message": {
+                "content": "\n".join(
+                    [
+                        "Sure, keep focus and move calmly today",
+                        "Here's protect energy and stay clear now",
+                        "Heres start strong and stay steady always",
+                    ]
+                )
+            }
+        },
+    ]
+    monkeypatch.setattr(llm_module, "AsyncClient", FakeAsyncClient)
+
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/generate/single", json=sample_payload())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert len(payload["items"]) == 3
+    assert all(not item.lower().startswith(("sure", "here's", "heres")) for item in payload["items"])
+
+
+@pytest.mark.asyncio
+async def test_generate_single_splits_single_paragraph_into_requested_lines(monkeypatch) -> None:
+    """One-liner requests should salvage line items from sentence-style paragraph output."""
+
+    main_module, llm_module = reload_app(monkeypatch)
+    FakeAsyncClient.reset()
+    configure_default_payloads()
+    FakeAsyncClient.post_payloads["qwen2.5:7b-instruct"] = [
+        {
+            "message": {
+                "content": (
+                    "Keep your tone steady and practical. Share gratitude clearly with family. "
+                    "Start the week with calm confidence."
+                )
+            }
+        },
+        {
+            "message": {
+                "content": (
+                    "Keep your tone steady and practical. Share gratitude clearly with family. "
+                    "Start the week with calm confidence."
+                )
+            }
+        },
+    ]
+    monkeypatch.setattr(llm_module, "AsyncClient", FakeAsyncClient)
+
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/generate/single",
+            json=sample_payload(
+                output_spec={"format": "one_liner", "structure": {"items": 3, "no_numbering": True}}
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert len(payload["items"]) == 3
+
+
+@pytest.mark.asyncio
 async def test_generate_single_salvages_broken_qwen_json_without_leaking_blob(monkeypatch) -> None:
     """Malformed JSON-like model output should yield phrases, not raw JSON container text."""
 
@@ -632,3 +737,627 @@ async def test_compare_models_alias_returns_per_model_errors(monkeypatch) -> Non
     assert payload["results"][1]["error"]["error_type"] == "not_configured"
     assert payload["results"][1]["error"]["backend"] == "groq"
     assert payload["results"][1]["error"]["model"] == "llama-3.3-70b-versatile"
+
+
+@pytest.mark.asyncio
+async def test_generate_single_returns_raw_text_for_paragraph_format(monkeypatch) -> None:
+    """Paragraph format should return raw_text and no structured_output."""
+
+    main_module, llm_module = reload_app(monkeypatch)
+    FakeAsyncClient.reset()
+    configure_default_payloads()
+    FakeAsyncClient.post_payloads["qwen2.5:7b-instruct"] = {
+        "message": {
+            "content": (
+                "A gentle start helps set the day with steady attention and practical care. "
+                "Calm words hold focus when schedules tighten and expectations begin to stack up. "
+                "Small acts of gratitude keep relationships steady while people handle ordinary pressure. "
+                "Clear intent makes the message land because the language remains concrete, warm, and direct. "
+                "When details stay practical, readers trust the voice and remember the point after the first read."
+            )
+        }
+    }
+    monkeypatch.setattr(llm_module, "AsyncClient", FakeAsyncClient)
+
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/generate/single",
+            json=sample_payload(output_spec={"format": "paragraph"}),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["raw_text"]
+    assert payload["structured_output"] is None
+
+
+@pytest.mark.asyncio
+async def test_generate_single_accepts_length_only_miss_for_paragraph(monkeypatch) -> None:
+    """Length-only drift should not fail the request when structure is otherwise valid."""
+
+    main_module, llm_module = reload_app(monkeypatch)
+    FakeAsyncClient.reset()
+    configure_default_payloads()
+    FakeAsyncClient.post_payloads["qwen2.5:7b-instruct"] = [
+        {
+            "message": {
+                "content": (
+                    "Warm notes help teams reset after busy mornings. "
+                    "Shared gratitude keeps conversations practical and kind. "
+                    "Small routines lower stress and improve focus. "
+                    "Simple language makes support feel real."
+                )
+            }
+        },
+        {
+            "message": {
+                "content": (
+                    "Warm notes help teams reset after busy mornings. "
+                    "Shared gratitude keeps conversations practical and kind. "
+                    "Small routines lower stress and improve focus. "
+                    "Simple language makes support feel real."
+                )
+            }
+        },
+    ]
+    monkeypatch.setattr(llm_module, "AsyncClient", FakeAsyncClient)
+
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/generate/single",
+            json=sample_payload(output_spec={"format": "paragraph"}),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["raw_text"] is not None
+
+
+@pytest.mark.asyncio
+async def test_generate_single_returns_structured_output_for_pros_cons(monkeypatch) -> None:
+    """Pros/cons format should return parsed structured_output sections."""
+
+    main_module, llm_module = reload_app(monkeypatch)
+    FakeAsyncClient.reset()
+    configure_default_payloads()
+    FakeAsyncClient.post_payloads["qwen2.5:7b-instruct"] = {
+        "message": {
+            "content": "\n".join(
+                [
+                    "Pros:",
+                    "- Fast onboarding",
+                    "- Lower cost",
+                    "Cons:",
+                    "- Less customization",
+                    "- Requires manual review",
+                ]
+            )
+        }
+    }
+    monkeypatch.setattr(llm_module, "AsyncClient", FakeAsyncClient)
+
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/generate/single",
+            json=sample_payload(
+                output_spec={
+                    "format": "pros_cons",
+                    "structure": {"items": 2},
+                }
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["raw_text"] is None
+    assert payload["structured_output"] == {
+        "pros": ["Fast onboarding", "Lower cost"],
+        "cons": ["Less customization", "Requires manual review"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_compare_models_winner_is_quality_first_not_latency(monkeypatch) -> None:
+    """Compare winner should be chosen by quality score, not faster response time."""
+
+    main_module, llm_module = reload_app(monkeypatch)
+    FakeAsyncClient.reset()
+    configure_default_payloads()
+    FakeAsyncClient.post_payloads["qwen2.5:7b-instruct"] = {
+        "message": {
+            "content": "\n".join(
+                [
+                    "Kind planning keeps the morning calm and focused.",
+                    "Shared gratitude helps teams move with trust.",
+                    "Small wins today create steady confidence tomorrow.",
+                ]
+            )
+        }
+    }
+    FakeAsyncClient.post_payloads["mistral:7b"] = {
+        "message": {
+            "content": "\n".join(
+                [
+                    "Wishing you steady progress this week.",
+                    "Wishing you steady progress today.",
+                    "Wishing you steady progress always.",
+                ]
+            )
+        }
+    }
+
+    class DelayedQwenClient(FakeAsyncClient):
+        async def post(self, url: str, *, headers=None, json=None):  # type: ignore[override]
+            model_name = json.get("model") if isinstance(json, dict) else None
+            if model_name == "qwen2.5:7b-instruct":
+                await asyncio.sleep(0.05)
+            return await super().post(url, headers=headers, json=json)
+
+    monkeypatch.setattr(llm_module, "AsyncClient", DelayedQwenClient)
+
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/generate/compare-models",
+            json=compare_payload(
+                targets=[
+                    {"backend": "ollama", "model": "qwen2.5:7b-instruct"},
+                    {"backend": "ollama", "model": "mistral:7b"},
+                ],
+                output_spec={
+                    "format": "one_liner",
+                    "structure": {"items": 3, "no_numbering": True},
+                },
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["winner"] is not None
+    assert payload["winner"]["model"] == "qwen2.5:7b-instruct"
+
+    results_by_model = {item["model"]: item for item in payload["results"]}
+    assert results_by_model["qwen2.5:7b-instruct"]["latency_ms"] >= 50
+    assert (
+        results_by_model["qwen2.5:7b-instruct"]["quality"]["total"]
+        > results_by_model["mistral:7b"]["quality"]["total"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_compare_models_uses_judge_winner_when_enabled(monkeypatch) -> None:
+    """When judge is enabled in always mode, final winner should follow judge_result winner."""
+
+    main_module, llm_module = reload_app(
+        monkeypatch,
+        judge_enabled="true",
+        judge_mode="always",
+        judge_provider="ollama",
+        judge_model="judge-ranker",
+    )
+    FakeAsyncClient.reset()
+    configure_default_payloads()
+    FakeAsyncClient.post_payloads["qwen2.5:7b-instruct"] = {
+        "message": {
+            "content": "\n".join(
+                [
+                    "Kind planning keeps the morning calm and focused.",
+                    "Shared gratitude helps teams move with trust.",
+                    "Small wins today create steady confidence tomorrow.",
+                ]
+            )
+        }
+    }
+    FakeAsyncClient.post_payloads["mistral:7b"] = {
+        "message": {
+            "content": "\n".join(
+                [
+                    "Wishing you steady progress this week.",
+                    "Wishing you steady progress today.",
+                    "Wishing you steady progress always.",
+                ]
+            )
+        }
+    }
+    FakeAsyncClient.post_payloads["judge-ranker"] = {
+        "message": {
+            "content": json.dumps(
+                {
+                    "winner_key": "modelB",
+                    "ranking": ["modelB", "modelA"],
+                    "scores": {
+                        "modelB": {
+                            "format_compliance": 30,
+                            "tone_alignment": 17,
+                            "originality": 18,
+                            "clarity_coherence": 17,
+                            "policy_cleanliness": 10,
+                            "total": 92,
+                            "reasons": ["More original and clearer."],
+                            "violations": [],
+                        },
+                        "modelA": {
+                            "format_compliance": 30,
+                            "tone_alignment": 12,
+                            "originality": 10,
+                            "clarity_coherence": 12,
+                            "policy_cleanliness": 10,
+                            "total": 74,
+                            "reasons": ["Less original."],
+                            "violations": ["cliche"],
+                        },
+                    },
+                }
+            )
+        }
+    }
+    monkeypatch.setattr(llm_module, "AsyncClient", FakeAsyncClient)
+
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/generate/compare-models",
+            json=compare_payload(
+                targets=[
+                    {"backend": "ollama", "model": "qwen2.5:7b-instruct"},
+                    {"backend": "ollama", "model": "mistral:7b"},
+                ],
+                output_spec={
+                    "format": "one_liner",
+                    "structure": {"items": 3, "no_numbering": True},
+                },
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["winner_source"] == "judge_ollama"
+    assert payload["judge_result"] is not None
+    assert payload["judge_result"]["winner_key"] == "modelB"
+    assert payload["judge_json"] is not None
+    assert payload["judge_json"]["winner_key"] == "modelB"
+    assert payload["judge_reason"] == "More original and clearer."
+    assert payload["winner"] is not None
+    assert payload["winner"]["model"] == "mistral:7b"
+
+    results_by_model = {item["model"]: item for item in payload["results"]}
+    assert (
+        results_by_model["qwen2.5:7b-instruct"]["quality"]["total"]
+        > results_by_model["mistral:7b"]["quality"]["total"]
+    )
+
+    judge_calls = [
+        call
+        for call in FakeAsyncClient.calls
+        if call["url"] == "http://fake-ollama/api/chat"
+        and isinstance(call.get("json"), dict)
+        and call["json"].get("model") == "judge-ranker"
+    ]
+    assert len(judge_calls) == 1
+    judge_messages = judge_calls[0]["json"]["messages"]
+    combined_prompt = "\n".join(str(message.get("content", "")) for message in judge_messages)
+    assert "Do NOT rank by latency/speed." in combined_prompt
+    assert "Do NOT prefer shorter/longer unless format demands it." in combined_prompt
+
+
+def test_judge_prompt_includes_speed_and_requirements(monkeypatch) -> None:
+    """Judge prompt should include no-speed rule and prompt requirement context."""
+
+    reload_app(
+        monkeypatch,
+        judge_enabled="true",
+        judge_mode="always",
+        judge_provider="openai",
+        openai_judge_enabled="true",
+        openai_api_key="test-openai-key",
+    )
+    judge_module = importlib.import_module("app.judge")
+    schemas_module = importlib.import_module("app.schemas")
+
+    payload = schemas_module.GenerateCompareModelsRequest.model_validate(
+        compare_payload(
+            targets=[
+                {"backend": "ollama", "model": "qwen2.5:7b-instruct"},
+                {"backend": "ollama", "model": "mistral:7b"},
+            ],
+            output_spec={"format": "one_liner", "structure": {"items": 3}},
+        )
+    )
+    score = schemas_module.QualityScore(
+        format_compliance=30,
+        tone_alignment=15,
+        originality=14,
+        clarity_coherence=15,
+        policy_cleanliness=9,
+        total=83,
+        reasons=[],
+        warnings=[],
+    )
+    candidate_map = {
+        "modelA": schemas_module.CompareModelResult(
+            ok=True,
+            backend="ollama",
+            model="qwen2.5:7b-instruct",
+            items=["Line one", "Line two", "Line three"],
+            quality=score,
+        ),
+        "modelB": schemas_module.CompareModelResult(
+            ok=True,
+            backend="ollama",
+            model="mistral:7b",
+            items=["Alt one", "Alt two", "Alt three"],
+            quality=score,
+        ),
+    }
+
+    messages = judge_module.build_judge_messages(payload, candidate_map)
+    combined_prompt = "\n".join(str(message.get("content", "")) for message in messages)
+    assert "Do NOT rank by latency/speed." in combined_prompt
+    assert "Do NOT prefer shorter/longer unless format demands it." in combined_prompt
+    assert "Assess quality for intended use and non-genericness." in combined_prompt
+    assert "Output format:" in combined_prompt
+
+
+@pytest.mark.asyncio
+async def test_compare_models_tie_break_uses_openai_judge(monkeypatch) -> None:
+    """Tie-break mode should invoke OpenAI judge when top-two scores are within threshold."""
+
+    main_module, llm_module = reload_app(
+        monkeypatch,
+        judge_enabled="true",
+        judge_mode="tie_break",
+        judge_provider="openai",
+        openai_judge_enabled="true",
+        openai_api_key="test-openai-key",
+        judge_tie_threshold="100",
+    )
+    FakeAsyncClient.reset()
+    configure_default_payloads()
+    FakeAsyncClient.post_payloads["qwen2.5:7b-instruct"] = {
+        "message": {
+            "content": "\n".join(
+                [
+                    "Kind planning keeps the morning calm and focused.",
+                    "Shared gratitude helps teams move with trust.",
+                    "Small wins today create steady confidence tomorrow.",
+                ]
+            )
+        }
+    }
+    FakeAsyncClient.post_payloads["mistral:7b"] = {
+        "message": {
+            "content": "\n".join(
+                [
+                    "Wishing you steady progress this week.",
+                    "Wishing you steady progress today.",
+                    "Wishing you steady progress always.",
+                ]
+            )
+        }
+    }
+    monkeypatch.setattr(llm_module, "AsyncClient", FakeAsyncClient)
+
+    judge_module = importlib.import_module("app.judge")
+    schemas_module = importlib.import_module("app.schemas")
+
+    async def fake_openai_judge(context, candidates):
+        assert context["theme_name"] == "Warm Wishes"
+        assert sorted(candidates.keys()) == ["modelA", "modelB"]
+        return schemas_module.JudgeResult.model_validate(
+            {
+                "winner_key": "modelB",
+                "ranking": ["modelB", "modelA"],
+                "scores": {
+                    "modelA": {
+                        "format_compliance": 30,
+                        "tone_alignment": 16,
+                        "originality": 15,
+                        "clarity_coherence": 16,
+                        "policy_cleanliness": 10,
+                        "total": 87,
+                        "reasons": ["Good quality."],
+                        "violations": [],
+                    },
+                    "modelB": {
+                        "format_compliance": 30,
+                        "tone_alignment": 17,
+                        "originality": 18,
+                        "clarity_coherence": 17,
+                        "policy_cleanliness": 10,
+                        "total": 92,
+                        "reasons": ["More original and clearer."],
+                        "violations": [],
+                    },
+                },
+            }
+        )
+
+    monkeypatch.setattr(judge_module, "openai_judge_candidates", fake_openai_judge)
+
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/generate/compare-models",
+            json=compare_payload(
+                targets=[
+                    {"backend": "ollama", "model": "qwen2.5:7b-instruct"},
+                    {"backend": "ollama", "model": "mistral:7b"},
+                ],
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["winner_source"] == "judge_openai"
+    assert payload["judge_result"] is not None
+    assert payload["judge_result"]["winner_key"] == "modelB"
+    assert payload["winner"]["model"] == "mistral:7b"
+
+
+@pytest.mark.asyncio
+async def test_compare_models_missing_openai_key_falls_back_to_baseline(monkeypatch) -> None:
+    """Missing OPENAI_API_KEY should keep baseline winner and avoid crashes."""
+
+    main_module, llm_module = reload_app(
+        monkeypatch,
+        judge_enabled="true",
+        judge_mode="always",
+        judge_provider="openai",
+        openai_judge_enabled="true",
+        openai_api_key="",
+    )
+    FakeAsyncClient.reset()
+    configure_default_payloads()
+    FakeAsyncClient.post_payloads["qwen2.5:7b-instruct"] = {
+        "message": {
+            "content": "\n".join(
+                [
+                    "Kind planning keeps the morning calm and focused.",
+                    "Shared gratitude helps teams move with trust.",
+                    "Small wins today create steady confidence tomorrow.",
+                ]
+            )
+        }
+    }
+    FakeAsyncClient.post_payloads["mistral:7b"] = {
+        "message": {
+            "content": "\n".join(
+                [
+                    "Wishing you steady progress this week.",
+                    "Wishing you steady progress today.",
+                    "Wishing you steady progress always.",
+                ]
+            )
+        }
+    }
+    monkeypatch.setattr(llm_module, "AsyncClient", FakeAsyncClient)
+
+    judge_module = importlib.import_module("app.judge")
+
+    async def should_not_run(*args, **kwargs):
+        raise AssertionError("OpenAI judge should not be called when API key is missing.")
+
+    monkeypatch.setattr(judge_module, "openai_judge_candidates", should_not_run)
+
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/generate/compare-models",
+            json=compare_payload(
+                targets=[
+                    {"backend": "ollama", "model": "qwen2.5:7b-instruct"},
+                    {"backend": "ollama", "model": "mistral:7b"},
+                ],
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["winner_source"] == "baseline"
+    assert payload["judge_result"] is None
+    assert "OPENAI_API_KEY" in (payload.get("judge_reason") or "")
+    assert payload["winner"] is not None
+    assert payload["winner"]["model"] == "qwen2.5:7b-instruct"
+
+
+@pytest.mark.asyncio
+async def test_compare_models_openai_disabled_uses_default_ollama_judge(monkeypatch) -> None:
+    """OpenAI judge must not run unless OPENAI_JUDGE_ENABLED is explicitly true."""
+
+    main_module, llm_module = reload_app(
+        monkeypatch,
+        judge_enabled="true",
+        judge_mode="always",
+        judge_provider="openai",
+        openai_judge_enabled="false",
+        judge_model="judge-ranker",
+        openai_api_key="test-openai-key",
+    )
+    FakeAsyncClient.reset()
+    configure_default_payloads()
+    FakeAsyncClient.post_payloads["qwen2.5:7b-instruct"] = {
+        "message": {
+            "content": "\n".join(
+                [
+                    "Kind planning keeps the morning calm and focused.",
+                    "Shared gratitude helps teams move with trust.",
+                    "Small wins today create steady confidence tomorrow.",
+                ]
+            )
+        }
+    }
+    FakeAsyncClient.post_payloads["mistral:7b"] = {
+        "message": {
+            "content": "\n".join(
+                [
+                    "Wishing you steady progress this week.",
+                    "Wishing you steady progress today.",
+                    "Wishing you steady progress always.",
+                ]
+            )
+        }
+    }
+    FakeAsyncClient.post_payloads["judge-ranker"] = {
+        "message": {
+            "content": json.dumps(
+                {
+                    "winner_key": "modelB",
+                    "ranking": ["modelB", "modelA"],
+                    "scores": {
+                        "modelA": {
+                            "format_compliance": 30,
+                            "tone_alignment": 16,
+                            "originality": 15,
+                            "clarity_coherence": 16,
+                            "policy_cleanliness": 10,
+                            "total": 87,
+                            "reasons": ["Good quality."],
+                            "violations": [],
+                        },
+                        "modelB": {
+                            "format_compliance": 30,
+                            "tone_alignment": 17,
+                            "originality": 18,
+                            "clarity_coherence": 17,
+                            "policy_cleanliness": 10,
+                            "total": 92,
+                            "reasons": ["More original and clearer."],
+                            "violations": [],
+                        },
+                    },
+                }
+            )
+        }
+    }
+    monkeypatch.setattr(llm_module, "AsyncClient", FakeAsyncClient)
+
+    judge_module = importlib.import_module("app.judge")
+
+    async def should_not_run_openai(*args, **kwargs):
+        raise AssertionError("OpenAI judge should not run when OPENAI_JUDGE_ENABLED=false.")
+
+    monkeypatch.setattr(judge_module, "openai_judge_candidates", should_not_run_openai)
+
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/generate/compare-models",
+            json=compare_payload(
+                targets=[
+                    {"backend": "ollama", "model": "qwen2.5:7b-instruct"},
+                    {"backend": "ollama", "model": "mistral:7b"},
+                ],
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["winner_source"] == "judge_ollama"
+    assert payload["judge_result"] is not None
+    assert payload["judge_result"]["winner_key"] == "modelB"
