@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+from time import perf_counter
+from typing import Literal
 
 from app.config import settings
 from app.errors import AppError
@@ -75,10 +77,20 @@ def build_judge_context(payload: GenerateCompareModelsRequest) -> dict[str, obje
     """Build judge context from the original generation request."""
 
     spec = payload.output_spec or OutputSpec()
+    request_context = payload.model_dump(mode="json")
+    cultural_context = str(payload.cultural_context).strip() or "global"
     return {
         "theme_name": payload.theme_name,
         "keywords": payload.prompt_keywords,
         "audience": payload.audience,
+        "cultural_context": cultural_context,
+        "tone_settings": {
+            "tone_funny_pct": payload.tone_funny_pct,
+            "tone_emotion_pct": payload.tone_emotion_pct,
+            "tone_style": payload.tone_style,
+            "emoji_policy": payload.emoji_policy,
+        },
+        "request_context": request_context,
         "tone_funny_pct": payload.tone_funny_pct,
         "tone_emotion_pct": payload.tone_emotion_pct,
         "tone_style": payload.tone_style,
@@ -104,8 +116,12 @@ def build_judge_messages(
     return build_openai_judge_messages(context, candidates)
 
 
-def make_ollama_judge_payload(shared: GenerateCompareModelsRequest) -> GenerateSingleRequest:
-    """Create one internal request payload for Ollama judge LLM calls."""
+def make_backend_judge_payload(
+    shared: GenerateCompareModelsRequest,
+    *,
+    provider: Literal["ollama", "groq"],
+) -> GenerateSingleRequest:
+    """Create one internal request payload for backend judge LLM calls."""
 
     return GenerateSingleRequest(
         theme_name=shared.theme_name,
@@ -113,7 +129,7 @@ def make_ollama_judge_payload(shared: GenerateCompareModelsRequest) -> GenerateS
         tone_emotion_pct=shared.tone_emotion_pct,
         prompt_keywords=shared.prompt_keywords,
         visual_style=shared.visual_style,
-        backend="ollama",
+        backend=provider,
         model=settings.judge_model,
         count=1,
         max_tokens=900,
@@ -123,6 +139,7 @@ def make_ollama_judge_payload(shared: GenerateCompareModelsRequest) -> GenerateS
         emoji_policy=shared.emoji_policy,
         tone_style=shared.tone_style,
         audience=shared.audience,
+        cultural_context=shared.cultural_context,
         avoid_cliches=shared.avoid_cliches,
         avoid_phrases=shared.avoid_phrases,
         output_format="lines",
@@ -132,47 +149,57 @@ def make_ollama_judge_payload(shared: GenerateCompareModelsRequest) -> GenerateS
     )
 
 
-async def run_ollama_judge(
+async def run_backend_judge(
     payload: GenerateCompareModelsRequest,
     candidate_map: dict[str, CompareModelResult],
+    *,
+    provider: Literal["ollama", "groq"],
 ) -> JudgeRunResult:
-    """Run judge with Ollama provider."""
+    """Run judge with one non-OpenAI backend provider."""
 
     candidate_ids = list(candidate_map.keys())
     messages = build_judge_messages(payload, candidate_map)
 
     try:
-        judge_payload = make_ollama_judge_payload(payload)
+        judge_payload = make_backend_judge_payload(payload, provider=provider)
     except Exception:
         return JudgeRunResult(
             decision=None,
             candidate_map=candidate_map,
-            source="judge_ollama",
+            source="judge",
             reason="Judge configuration is invalid; baseline winner used.",
         )
 
     logger.info(
-        "judge_request provider=ollama model=%s candidate_count=%s candidates=%s",
+        "judge_request provider=%s model=%s candidate_count=%s candidates=%s timeout_sec=%s connect_timeout_sec=%s",
+        provider,
         settings.judge_model,
         len(candidate_ids),
         ",".join(candidate_ids),
+        settings.judge_timeout_sec,
+        settings.judge_connect_timeout_sec,
     )
     try:
-        response_text = await call_backend(judge_payload, messages=messages)
+        response_text = await call_backend(
+            judge_payload,
+            messages=messages,
+            timeout_sec=settings.judge_timeout_sec,
+            connect_timeout_sec=settings.judge_connect_timeout_sec,
+        )
     except AppError as exc:
-        logger.warning("judge_call_failed provider=ollama error_type=%s message=%s", exc.error_type, exc.message)
+        logger.warning("judge_call_failed provider=%s error_type=%s message=%s", provider, exc.error_type, exc.message)
         return JudgeRunResult(
             decision=None,
             candidate_map=candidate_map,
-            source="judge_ollama",
+            source="judge",
             reason=f"Judge failed: {exc.message}",
         )
     except Exception as exc:  # pragma: no cover - defensive fallback
-        logger.warning("judge_call_failed provider=ollama error_type=internal message=%s", str(exc))
+        logger.warning("judge_call_failed provider=%s error_type=internal message=%s", provider, str(exc))
         return JudgeRunResult(
             decision=None,
             candidate_map=candidate_map,
-            source="judge_ollama",
+            source="judge",
             reason="Judge failed: internal error.",
         )
 
@@ -181,19 +208,20 @@ async def run_ollama_judge(
         return JudgeRunResult(
             decision=None,
             candidate_map=candidate_map,
-            source="judge_ollama",
+            source="judge",
             reason="Judge output could not be parsed as strict JSON.",
         )
 
     logger.info(
-        "judge_response provider=ollama winner_key=%s ranking=%s",
+        "judge_response provider=%s winner_key=%s ranking=%s",
+        provider,
         decision.winner_key,
         ",".join(decision.ranking),
     )
     return JudgeRunResult(
         decision=decision,
         candidate_map=candidate_map,
-        source="judge_ollama",
+        source="judge",
         reason=None,
     )
 
@@ -208,7 +236,7 @@ async def run_openai_judge(
         return JudgeRunResult(
             decision=None,
             candidate_map=candidate_map,
-            source="judge_openai",
+            source="judge",
             reason="Judge skipped: OPENAI_API_KEY is required for JUDGE_PROVIDER=openai.",
         )
 
@@ -224,14 +252,14 @@ async def run_openai_judge(
         return JudgeRunResult(
             decision=None,
             candidate_map=candidate_map,
-            source="judge_openai",
+            source="judge",
             reason=f"Judge failed: {str(exc)}",
         )
 
     return JudgeRunResult(
         decision=decision,
         candidate_map=candidate_map,
-        source="judge_openai",
+        source="judge",
         reason=None,
     )
 
@@ -251,8 +279,39 @@ async def run_llm_judge(
         )
 
     candidate_map = {judge_candidate_id(index): item for index, item in enumerate(candidates)}
+    judge_provider = settings.judge_provider
+    judge_model = settings.judge_model
     if settings.openai_judge_enabled:
-        return await run_openai_judge(payload, candidate_map)
-    if settings.judge_provider == "openai":
+        judge_provider = "openai"
+        judge_model = settings.openai_judge_model
+    elif settings.judge_provider == "openai":
+        judge_provider = "ollama"
+        judge_model = settings.judge_model
+
+    started_at = perf_counter()
+    logger.info(
+        "compare_models_judge_started judge_provider=%s judge_model=%s candidate_count=%s",
+        judge_provider,
+        judge_model,
+        len(candidate_map),
+    )
+
+    if settings.openai_judge_enabled:
+        result = await run_openai_judge(payload, candidate_map)
+    elif settings.judge_provider == "openai":
         logger.info("judge_provider_overridden requested=openai applied=ollama reason=openai_judge_disabled")
-    return await run_ollama_judge(payload, candidate_map)
+        result = await run_backend_judge(payload, candidate_map, provider="ollama")
+    elif settings.judge_provider == "groq":
+        result = await run_backend_judge(payload, candidate_map, provider="groq")
+    else:
+        result = await run_backend_judge(payload, candidate_map, provider="ollama")
+
+    elapsed_ms = int((perf_counter() - started_at) * 1000)
+    logger.info(
+        "compare_models_judge_completed judge_provider=%s judge_model=%s latency_ms=%s fallback_to_baseline=%s",
+        judge_provider,
+        judge_model,
+        elapsed_ms,
+        result.decision is None,
+    )
+    return result

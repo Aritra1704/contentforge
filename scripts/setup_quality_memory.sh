@@ -17,9 +17,9 @@ if [[ -z "${QUALITY_MEMORY_DSN:-}" ]]; then
 fi
 
 DB_DSN="$QUALITY_MEMORY_DSN"
-SCHEMA_NAME="${QUALITY_MEMORY_SCHEMA:-llm_comparator}"
+SCHEMA_NAME="${QUALITY_MEMORY_SCHEMA:-contentforge}"
 DROP_OLD_DB="${DROP_OLD_QUALITY_MEMORY_DB:-true}"
-OLD_DB_NAME="${OLD_QUALITY_MEMORY_DB_NAME:-llm_comparator}"
+OLD_DB_NAME="${OLD_QUALITY_MEMORY_DB_NAME:-contentforge}"
 
 echo "Target DSN is configured."
 echo "Target schema: ${SCHEMA_NAME}"

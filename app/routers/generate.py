@@ -14,7 +14,12 @@ from app.errors import AppError, BusyServiceError
 from app.judge import run_llm_judge
 from app.llm import generate_items
 from app.observability import format_log_line, get_request_context, sanitize_details, update_request_context
-from app.quality import is_quality_valid, pick_quality_winner, score_quality
+from app.quality import (
+    apply_compare_quality_penalties,
+    is_quality_valid,
+    pick_quality_winner,
+    score_quality,
+)
 from app.quality_memory import (
     augment_avoid_phrases_with_memory,
     output_text_for_storage,
@@ -94,6 +99,7 @@ def build_single_request(
         emoji_policy=shared.emoji_policy,
         tone_style=shared.tone_style,
         audience=shared.audience,
+        cultural_context=shared.cultural_context,
         avoid_cliches=shared.avoid_cliches,
         avoid_phrases=shared.avoid_phrases,
         output_format=shared.output_format,
@@ -113,6 +119,25 @@ def top_quality_gap(results: list[CompareModelResult]) -> int | None:
     if len(sorted_scores) < 2:
         return None
     return sorted_scores[0] - sorted_scores[1]
+
+
+def baseline_winner_why(
+    results: list[CompareModelResult],
+    winner: CompareModelsWinner | None,
+) -> str | None:
+    """Return short winner explanation for baseline quality picks."""
+
+    if winner is None:
+        return None
+    for item in results:
+        if not item.ok or item.quality is None:
+            continue
+        if item.backend != winner.backend or item.model != winner.model:
+            continue
+        if item.quality.reasons:
+            return item.quality.reasons[0]
+        return f"Highest baseline quality score ({item.quality.total}/100)."
+    return "Highest baseline quality score."
 
 
 async def execute_compare_target(
@@ -281,12 +306,14 @@ async def compare_models(
         )
     )
 
+    apply_compare_quality_penalties(results)
     baseline_winner = pick_quality_winner(results)
     final_winner = baseline_winner
     judge_result = None
     judge_json = None
     judge_reason: str | None = None
     winner_source = "baseline"
+    why_winner = baseline_winner_why(results, baseline_winner)
 
     if settings.judge_enabled:
         should_run_judge = False
@@ -313,10 +340,11 @@ async def compare_models(
                         model=judge_winner_result.model,
                         total_score=winner_total,
                     )
-                    winner_source = judge_run.source or "baseline"
+                    winner_source = "judge"
                     winner_entry = judge_run.decision.scores.get(judge_run.decision.winner_key)
-                    winner_reason = winner_entry.reasons[0] if winner_entry and winner_entry.reasons else None
+                    winner_reason = winner_entry.reason.strip() if winner_entry and winner_entry.reason else None
                     judge_reason = winner_reason or "Winner selected by LLM judge."
+                    why_winner = judge_reason
             judge_json = judge_result.model_dump(mode="json") if judge_result is not None else None
         elif settings.judge_mode == "tie_break":
             judge_reason = "Judge skipped: baseline lead exceeded tie threshold."
@@ -343,6 +371,7 @@ async def compare_models(
         judge_result=judge_result_payload,
         judge_json=judge_json,
         judge_reason=judge_reason,
+        why_winner=why_winner,
         meta=ResponseMeta(
             latency_ms=latency_ms,
             request_id=request.state.request_id,

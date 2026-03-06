@@ -1,3 +1,5 @@
-cd /Users/aritrarpal/Documents/workspace_biz/llm-comparator
+cd /Users/aritrarpal/Documents/workspace_biz/contentforge
+
 source venv/bin/activate
-uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+python -m pip install -r requirements.txt
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload

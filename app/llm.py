@@ -843,10 +843,24 @@ async def is_ollama_reachable() -> bool:
     return True
 
 
+def _resolve_timeout(
+    *,
+    timeout_sec: float | None = None,
+    connect_timeout_sec: float | None = None,
+) -> httpx.Timeout:
+    """Build a request timeout object with optional connect override."""
+
+    total_timeout = timeout_sec if timeout_sec is not None else settings.request_timeout_sec
+    connect_timeout = connect_timeout_sec if connect_timeout_sec is not None else total_timeout
+    return httpx.Timeout(total_timeout, connect=connect_timeout)
+
+
 async def call_ollama(
     payload: GenerateSingleRequest,
     *,
     messages: list[dict[str, str]],
+    timeout_sec: float | None = None,
+    connect_timeout_sec: float | None = None,
 ) -> str:
     """Call Ollama's chat endpoint and return the assistant content."""
 
@@ -864,9 +878,10 @@ async def call_ollama(
         "options": options,
     }
     url = f"{settings.ollama_url.rstrip('/')}/api/chat"
+    timeout = _resolve_timeout(timeout_sec=timeout_sec, connect_timeout_sec=connect_timeout_sec)
 
     try:
-        async with AsyncClient(timeout=httpx.Timeout(settings.request_timeout_sec)) as client:
+        async with AsyncClient(timeout=timeout) as client:
             response = await client.post(url, json=request_body)
             response.raise_for_status()
     except httpx.TimeoutException as exc:
@@ -900,6 +915,8 @@ async def call_groq(
     payload: GenerateSingleRequest,
     *,
     messages: list[dict[str, str]],
+    timeout_sec: float | None = None,
+    connect_timeout_sec: float | None = None,
 ) -> str:
     """Call Groq's OpenAI-compatible chat endpoint and return the response content."""
 
@@ -918,9 +935,10 @@ async def call_groq(
     }
     if payload.seed is not None:
         request_body["seed"] = payload.seed
+    timeout = _resolve_timeout(timeout_sec=timeout_sec, connect_timeout_sec=connect_timeout_sec)
 
     try:
-        async with AsyncClient(timeout=httpx.Timeout(settings.request_timeout_sec)) as client:
+        async with AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={
@@ -981,12 +999,24 @@ async def call_backend(
     payload: GenerateSingleRequest,
     *,
     messages: list[dict[str, str]],
+    timeout_sec: float | None = None,
+    connect_timeout_sec: float | None = None,
 ) -> str:
     """Call the configured backend for one generation attempt."""
 
     if payload.backend == "ollama":
-        return await call_ollama(payload, messages=messages)
-    return await call_groq(payload, messages=messages)
+        return await call_ollama(
+            payload,
+            messages=messages,
+            timeout_sec=timeout_sec,
+            connect_timeout_sec=connect_timeout_sec,
+        )
+    return await call_groq(
+        payload,
+        messages=messages,
+        timeout_sec=timeout_sec,
+        connect_timeout_sec=connect_timeout_sec,
+    )
 
 
 def normalize_generated_output(payload: GenerateSingleRequest, output: GeneratedOutput) -> GeneratedOutput:

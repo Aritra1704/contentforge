@@ -34,7 +34,7 @@ python -m uvicorn app.main:app --reload
 
 ## Config
 
-Relevant env vars are defined in [.env.example](/Users/aritrarpal/Documents/workspace_biz/llm-comparator/.env.example):
+Relevant env vars are defined in `.env.example`:
 
 - `OLLAMA_URL`
 - `OLLAMA_CHAT_MODELS`
@@ -46,6 +46,28 @@ Relevant env vars are defined in [.env.example](/Users/aritrarpal/Documents/work
 - `LOG_LEVEL`
 - `GROQ_API_KEY`
 - `GROQ_MODEL`
+- `JUDGE_ENABLED`
+- `JUDGE_PROVIDER` (default: `groq`)
+- `JUDGE_MODEL` (default: `llama-3.3-70b-versatile`)
+- `JUDGE_TIMEOUT_SEC`
+- `JUDGE_CONNECT_TIMEOUT_SEC`
+- `JUDGE_FALLBACK_TO_BASELINE`
+
+### Recommended judge setup
+
+Keep generation targets unchanged, and use Groq as the quality judge backend:
+
+```env
+JUDGE_ENABLED=true
+JUDGE_PROVIDER=groq
+JUDGE_MODEL=llama-3.3-70b-versatile
+JUDGE_TIMEOUT_SEC=120
+JUDGE_CONNECT_TIMEOUT_SEC=10
+JUDGE_FALLBACK_TO_BASELINE=true
+GROQ_API_KEY=your_groq_api_key
+```
+
+This setup avoids long local judge runtimes while preserving the same generation flow.
 
 ## Endpoints
 

@@ -11,9 +11,19 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 BackendName = Literal["ollama", "groq"]
 EmojiPolicy = Literal["none", "light", "expressive"]
 ToneStyle = Literal["minimal", "poetic", "conversational", "witty", "inspirational"]
+CulturalContext = Literal[
+    "global",
+    "indian",
+    "bengali",
+    "punjabi",
+    "south_indian",
+    "western",
+    "american",
+    "asian",
+]
 OutputFormat = Literal["lines", "numbered"]
 OutputSpecFormat = Literal["one_liner", "paragraph", "one_page", "pros_cons", "verse", "story"]
-WinnerSource = Literal["baseline", "judge_openai", "judge_ollama"]
+WinnerSource = Literal["baseline", "judge", "judge_openai", "judge_ollama"]
 
 DEFAULT_AVOID_PHRASES = [
     "new week",
@@ -233,6 +243,7 @@ class GenerateSingleRequest(BaseModel):
     emoji_policy: EmojiPolicy = "none"
     tone_style: ToneStyle = "conversational"
     audience: str = "general"
+    cultural_context: CulturalContext = "global"
     avoid_cliches: bool = True
     avoid_phrases: list[str] = Field(default_factory=lambda: list(DEFAULT_AVOID_PHRASES))
     output_format: OutputFormat = "numbered"
@@ -261,6 +272,16 @@ class GenerateSingleRequest(BaseModel):
 
         value = value.strip()
         return value or "general"
+
+    @field_validator("cultural_context", mode="before")
+    @classmethod
+    def normalize_cultural_context(cls, value: str) -> str:
+        """Normalize cultural context aliases to enum values."""
+
+        normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized == "southindian":
+            return "south_indian"
+        return normalized
 
     @field_validator("avoid_phrases")
     @classmethod
@@ -338,12 +359,21 @@ class ProsConsStructuredOutput(BaseModel):
 class QualityScore(BaseModel):
     """Quality-first scoring breakdown for one generated output."""
 
-    format_compliance: int = Field(ge=0, le=30)
-    tone_alignment: int = Field(ge=0, le=20)
-    originality: int = Field(ge=0, le=20)
-    clarity_coherence: int = Field(ge=0, le=20)
-    policy_cleanliness: int = Field(ge=0, le=10)
-    total: int = Field(ge=0, le=100)
+    task_fit: int = Field(default=0, ge=0, le=25)
+    originality: int = Field(default=0, ge=0, le=20)
+    emotional_authenticity: int = Field(default=0, ge=0, le=20)
+    completeness: int = Field(default=0, ge=0, le=15)
+    clarity_and_flow: int = Field(default=0, ge=0, le=10)
+    policy_cleanliness: int = Field(default=0, ge=0, le=10)
+    bland_generic_penalty: int = Field(default=0, ge=0, le=30)
+    incomplete_ending_penalty: int = Field(default=0, ge=0, le=30)
+    overused_pattern_penalty: int = Field(default=0, ge=0, le=30)
+    robotic_tone_penalty: int = Field(default=0, ge=0, le=30)
+    total: int = Field(default=0, ge=0, le=100)
+    # Legacy fields retained for backward compatibility.
+    format_compliance: int = Field(default=0, ge=0, le=30)
+    tone_alignment: int = Field(default=0, ge=0, le=20)
+    clarity_coherence: int = Field(default=0, ge=0, le=20)
     reasons: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -392,6 +422,7 @@ class GenerateCompareModelsRequest(BaseModel):
     emoji_policy: EmojiPolicy = "none"
     tone_style: ToneStyle = "conversational"
     audience: str = "general"
+    cultural_context: CulturalContext = "global"
     avoid_cliches: bool = True
     avoid_phrases: list[str] = Field(default_factory=lambda: list(DEFAULT_AVOID_PHRASES))
     output_format: OutputFormat = "numbered"
@@ -423,6 +454,16 @@ class GenerateCompareModelsRequest(BaseModel):
 
         value = value.strip()
         return value or "general"
+
+    @field_validator("cultural_context", mode="before")
+    @classmethod
+    def normalize_cultural_context(cls, value: str) -> str:
+        """Normalize cultural context aliases to enum values."""
+
+        normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized == "southindian":
+            return "south_indian"
+        return normalized
 
     @field_validator("avoid_phrases")
     @classmethod
@@ -475,12 +516,19 @@ class CompareModelsWinner(BaseModel):
 class JudgeCandidateScore(BaseModel):
     """One per-candidate judge score breakdown."""
 
-    format_compliance: int = Field(ge=0, le=30)
-    tone_alignment: int = Field(ge=0, le=20)
-    originality: int = Field(ge=0, le=20)
-    clarity_coherence: int = Field(ge=0, le=20)
-    policy_cleanliness: int = Field(ge=0, le=10)
-    total: int = Field(ge=0, le=100)
+    task_fit: int = Field(default=0, ge=0, le=25)
+    originality: int = Field(default=0, ge=0, le=20)
+    emotional_authenticity: int = Field(default=0, ge=0, le=20)
+    completeness: int = Field(default=0, ge=0, le=15)
+    clarity_and_flow: int = Field(default=0, ge=0, le=10)
+    policy_cleanliness: int = Field(default=0, ge=0, le=10)
+    total: int = Field(default=0, ge=0, le=100)
+    reason: str = ""
+    issues: list[str] = Field(default_factory=list)
+    # Legacy compatibility fields for older judge JSON.
+    format_compliance: int = Field(default=0, ge=0, le=30)
+    tone_alignment: int = Field(default=0, ge=0, le=20)
+    clarity_coherence: int = Field(default=0, ge=0, le=20)
     reasons: list[str] = Field(default_factory=list)
     violations: list[str] = Field(default_factory=list)
 
@@ -491,6 +539,130 @@ class JudgeResult(BaseModel):
     winner_key: str
     ranking: list[str] = Field(default_factory=list)
     scores: dict[str, JudgeCandidateScore] = Field(default_factory=dict)
+
+
+class RoundRobinPromptContext(BaseModel):
+    """Prompt context shared by all pairwise judge comparisons."""
+
+    theme_name: str = Field(min_length=1)
+    tone_funny_pct: int = Field(ge=0, le=100)
+    tone_emotion_pct: int = Field(ge=0, le=100)
+    tone_style: ToneStyle = "conversational"
+    audience: str = "general"
+    cultural_context: CulturalContext = "global"
+    output_spec: OutputSpec = Field(default_factory=OutputSpec)
+    avoid_cliches: bool = False
+
+    @field_validator("audience")
+    @classmethod
+    def strip_audience(cls, value: str) -> str:
+        """Normalize audience text and enforce a non-empty value."""
+
+        value = value.strip()
+        return value or "general"
+
+    @field_validator("cultural_context", mode="before")
+    @classmethod
+    def normalize_cultural_context(cls, value: str) -> str:
+        """Normalize cultural context aliases to enum values."""
+
+        normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized == "southindian":
+            return "south_indian"
+        return normalized
+
+    @field_validator("avoid_cliches", mode="before")
+    @classmethod
+    def normalize_avoid_cliches(cls, value: object) -> object:
+        """Treat null avoid_cliches values as false while preserving bool validation."""
+
+        if value is None:
+            return False
+        return value
+
+    @model_validator(mode="after")
+    def apply_output_spec(self) -> "RoundRobinPromptContext":
+        """Populate normalized output constraints for pairwise judge prompts."""
+
+        self.output_spec = normalize_output_spec(self)
+        return self
+
+
+class RoundRobinCandidateInput(BaseModel):
+    """One candidate text to compare in round-robin judging."""
+
+    model: str = Field(min_length=1)
+    backend: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+
+    @field_validator("model", "backend", "text")
+    @classmethod
+    def strip_fields(cls, value: str) -> str:
+        """Trim whitespace from candidate fields."""
+
+        return value.strip()
+
+
+class RoundRobinJudgeRequest(BaseModel):
+    """Request payload for POST /judge/round-robin."""
+
+    prompt_context: RoundRobinPromptContext
+    candidates: list[RoundRobinCandidateInput] = Field(min_length=2, max_length=12)
+
+
+class RoundRobinDimensionScore(BaseModel):
+    """Per-candidate dimension scores returned by pairwise judge."""
+
+    prompt_fit: int = Field(default=0, ge=0, le=20)
+    human_feel: int = Field(default=0, ge=0, le=20)
+    originality: int = Field(default=0, ge=0, le=20)
+    emotional_authenticity: int = Field(default=0, ge=0, le=15)
+    completeness: int = Field(default=0, ge=0, le=15)
+    publishability: int = Field(default=0, ge=0, le=10)
+    total_points: int = Field(default=0, ge=0, le=100)
+
+
+class RoundRobinPairwiseResult(BaseModel):
+    """One pairwise comparison result in a round-robin run."""
+
+    candidate_a_key: str
+    candidate_b_key: str
+    winner_key: str
+    reason: str = ""
+    scores: dict[str, RoundRobinDimensionScore] = Field(default_factory=dict)
+
+
+class RoundRobinLeaderboardEntry(BaseModel):
+    """Aggregated leaderboard entry from pairwise wins and points."""
+
+    candidate_key: str
+    model: str
+    backend: str
+    wins: int = Field(default=0, ge=0)
+    losses: int = Field(default=0, ge=0)
+    points: int = Field(default=0, ge=0)
+
+
+class RoundRobinWinner(BaseModel):
+    """Top-ranked candidate for round-robin judging."""
+
+    candidate_key: str
+    model: str
+    backend: str
+    wins: int = Field(default=0, ge=0)
+    points: int = Field(default=0, ge=0)
+
+
+class RoundRobinJudgeResponse(BaseModel):
+    """Response payload for POST /judge/round-robin."""
+
+    pairwise_results: list[RoundRobinPairwiseResult] = Field(default_factory=list)
+    leaderboard: list[RoundRobinLeaderboardEntry] = Field(default_factory=list)
+    winner: RoundRobinWinner | None = None
+    timeout_seconds_used: float = Field(default=0, ge=0)
+    judge_provider: str = ""
+    judge_model: str = ""
+    warning: str | None = None
 
 
 class GenerateCompareModelsResponse(BaseModel):
@@ -504,6 +676,7 @@ class GenerateCompareModelsResponse(BaseModel):
     # Backward-compatible field for existing clients.
     judge_json: dict[str, Any] | None = None
     judge_reason: str | None = None
+    why_winner: str | None = None
     meta: ResponseMeta
 
 

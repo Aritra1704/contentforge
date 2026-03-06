@@ -50,3 +50,18 @@ def test_build_messages_uses_format_specific_template(format_name: str, expected
     assert messages[1]["role"] == "user"
     assert expected_fragment in messages[1]["content"]
     assert "Must not return JSON." in messages[1]["content"]
+
+
+def test_build_messages_includes_cultural_context_guidance() -> None:
+    """Prompt should include safe cultural guidance and non-stereotype constraints."""
+
+    request = GenerateSingleRequest.model_validate(
+        base_payload(cultural_context="bengali")
+    )
+    messages = build_messages(request)
+    user_prompt = messages[1]["content"]
+
+    assert "Cultural context: bengali" in user_prompt
+    assert "adda/chai/rain/Kolkata-friendly imagery" in user_prompt
+    assert "Do not stereotype or force cultural markers." in user_prompt
+    assert "Use cultural context only when relevant to the request." in user_prompt

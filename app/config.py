@@ -49,16 +49,19 @@ class Settings(BaseSettings):
     busy_retry_after_ms: int = Field(default=2000, validation_alias="BUSY_RETRY_AFTER_MS", ge=1)
     request_timeout_sec: float = Field(default=120.0, validation_alias="REQUEST_TIMEOUT_SEC", gt=0)
     judge_enabled: bool = Field(default=False, validation_alias="JUDGE_ENABLED")
-    judge_provider: Literal["openai", "ollama"] = Field(
-        default="ollama",
+    judge_provider: Literal["openai", "ollama", "groq"] = Field(
+        default="groq",
         validation_alias=AliasChoices("JUDGE_PROVIDER", "JUDGE_BACKEND"),
     )
-    judge_model: str = Field(default="qwen2.5:7b-instruct", validation_alias="JUDGE_MODEL")
+    judge_model: str = Field(default="llama-3.3-70b-versatile", validation_alias="JUDGE_MODEL")
+    judge_timeout_sec: float = Field(default=120.0, validation_alias="JUDGE_TIMEOUT_SEC", gt=0)
+    judge_connect_timeout_sec: float = Field(default=10.0, validation_alias="JUDGE_CONNECT_TIMEOUT_SEC", gt=0)
+    judge_fallback_to_baseline: bool = Field(default=True, validation_alias="JUDGE_FALLBACK_TO_BASELINE")
     openai_judge_enabled: bool = Field(default=False, validation_alias="OPENAI_JUDGE_ENABLED")
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
     openai_judge_model: str = Field(default="gpt-4o-mini", validation_alias="OPENAI_JUDGE_MODEL")
     judge_mode: Literal["tie_break", "always"] = Field(
-        default="tie_break",
+        default="always",
         validation_alias="JUDGE_MODE",
     )
     judge_tie_threshold: int = Field(default=7, validation_alias="JUDGE_TIE_THRESHOLD", ge=0)

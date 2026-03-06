@@ -19,6 +19,22 @@ def tone_direction(tone_funny_pct: int, tone_emotion_pct: int) -> str:
     return "Balanced and clean conversational tone."
 
 
+def cultural_context_guidance(cultural_context: str) -> str:
+    """Return culturally-aware guidance for prompt conditioning."""
+
+    guidance = {
+        "global": "Use globally neutral phrasing unless localized context is explicitly requested.",
+        "indian": "When relevant, favor grounded warmth with familiar India-friendly social context.",
+        "bengali": "When relevant, use softer reflective tone with adda/chai/rain/Kolkata-friendly imagery.",
+        "punjabi": "When relevant, use warm expressive family/community energy and celebration references.",
+        "south_indian": "When relevant, use grounded warmth with home/ritual/food/cultural familiarity.",
+        "western": "Use neutral western phrasing and cadence.",
+        "american": "Use casual direct phrasing with familiar pop-cultural cadence when relevant.",
+        "asian": "When relevant, keep restraint and subtle emotionality.",
+    }
+    return guidance.get(cultural_context, guidance["global"])
+
+
 def format_template(spec: OutputSpec) -> str:
     """Return the explicit template block for one output format."""
 
@@ -127,6 +143,11 @@ def build_guidelines_prompt(payload: GenerateSingleRequest) -> str:
         f"- Tone direction: {tone_direction(payload.tone_funny_pct, payload.tone_emotion_pct)}\n"
         f"- Tone style: {payload.tone_style}\n"
         f"- Audience: {payload.audience}\n"
+        f"- Cultural context: {payload.cultural_context}\n"
+        f"- Cultural guidance: {cultural_context_guidance(payload.cultural_context)}\n"
+        "- Do not stereotype or force cultural markers.\n"
+        "- Use cultural context only when relevant to the request.\n"
+        "- Keep cultural references natural.\n"
         f"- Emoji policy: {emoji_instruction}\n"
         f"- {avoid_instruction}\n"
         "- Must not return JSON.\n"

@@ -25,6 +25,8 @@ from app.schemas import (
     QualityRunHistoryItem,
     QualityScore,
 )
+from src.db.constants import QUALITY_RUNS_TABLE
+from src.db.verification import verify_quality_runs_table_exists
 
 logger = logging.getLogger(__name__)
 
@@ -39,31 +41,6 @@ OPENING_PREFIX_PATTERN = re.compile(r"^\s*(?:[-*•]|\d{1,3}[\)\].:-])?\s*")
 _SCHEMA_READY = False
 _SCHEMA_LOCK = Lock()
 _DEPENDENCY_WARNING_EMITTED = False
-
-CREATE_QUALITY_RUNS_SQL = """
-CREATE TABLE IF NOT EXISTS quality_runs (
-    run_id TEXT PRIMARY KEY,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    theme_name TEXT NOT NULL,
-    keywords TEXT[] NOT NULL DEFAULT '{}',
-    tone_config JSONB NOT NULL,
-    output_spec JSONB NOT NULL,
-    backend TEXT NOT NULL,
-    model TEXT NOT NULL,
-    output_text TEXT NOT NULL,
-    quality_score_json JSONB NOT NULL,
-    judge_json JSONB NULL,
-    detected_cliches TEXT[] NOT NULL DEFAULT '{}',
-    repetition_flags TEXT[] NOT NULL DEFAULT '{}',
-    json_leak_flag BOOLEAN NOT NULL DEFAULT FALSE
-);
-"""
-
-CREATE_QUALITY_RUNS_INDEX_SQL = [
-    "CREATE INDEX IF NOT EXISTS idx_quality_runs_created_at ON quality_runs (created_at DESC);",
-    "CREATE INDEX IF NOT EXISTS idx_quality_runs_theme_name ON quality_runs (LOWER(theme_name));",
-    "CREATE INDEX IF NOT EXISTS idx_quality_runs_keywords ON quality_runs USING GIN (keywords);",
-]
 
 
 def _emit_dependency_warning_once() -> None:
@@ -102,7 +79,7 @@ def _connect():
 
 
 def _ensure_schema_sync() -> None:
-    """Create quality memory table/indexes once per process when enabled."""
+    """Verify required quality memory table exists once per process when enabled."""
 
     global _SCHEMA_READY
     if not is_quality_memory_enabled() or _SCHEMA_READY:
@@ -113,21 +90,16 @@ def _ensure_schema_sync() -> None:
             return
         with _connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(CREATE_QUALITY_RUNS_SQL)
-                for statement in CREATE_QUALITY_RUNS_INDEX_SQL:
-                    cur.execute(statement)
+                verify_quality_runs_table_exists(cur)
         _SCHEMA_READY = True
 
 
 async def ensure_quality_memory_schema() -> None:
-    """Async wrapper to ensure table schema exists."""
+    """Async wrapper to verify required quality memory table exists."""
 
     if not is_quality_memory_enabled():
         return
-    try:
-        await asyncio.to_thread(_ensure_schema_sync)
-    except Exception as exc:  # pragma: no cover - defensive fallback
-        logger.warning("quality_memory_schema_failed message=%s", str(exc))
+    await asyncio.to_thread(_ensure_schema_sync)
 
 
 def _normalize_phrase(value: str) -> str:
@@ -211,6 +183,7 @@ def _payload_tone_config(payload: GenerateSingleRequest | GenerateCompareModelsR
         "tone_style": payload.tone_style,
         "emoji_policy": payload.emoji_policy,
         "audience": payload.audience,
+        "cultural_context": payload.cultural_context,
         "avoid_cliches": payload.avoid_cliches,
     }
 
@@ -222,7 +195,7 @@ def _fetch_similar_runs_sync(theme_name: str, keywords: list[str], limit: int) -
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT
                     run_id,
                     created_at,
@@ -238,7 +211,7 @@ def _fetch_similar_runs_sync(theme_name: str, keywords: list[str], limit: int) -
                     detected_cliches,
                     repetition_flags,
                     json_leak_flag
-                FROM quality_runs
+                FROM {QUALITY_RUNS_TABLE}
                 WHERE
                     LOWER(theme_name) = LOWER(%s)
                     OR LOWER(theme_name) LIKE LOWER(%s)
@@ -318,8 +291,8 @@ def _insert_quality_run_sync(record: dict[str, Any]) -> None:
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
-                INSERT INTO quality_runs (
+                f"""
+                INSERT INTO {QUALITY_RUNS_TABLE} (
                     run_id,
                     created_at,
                     theme_name,
@@ -448,7 +421,7 @@ def _fetch_quality_history_sync(
             detected_cliches,
             repetition_flags,
             json_leak_flag
-        FROM quality_runs
+        FROM {QUALITY_RUNS_TABLE}
         {where_sql}
         ORDER BY created_at DESC
         LIMIT %s

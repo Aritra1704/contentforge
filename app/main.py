@@ -16,6 +16,7 @@ from app.observability import (
 )
 from app.routers.generate import legacy_router as generation_router
 from app.routers.generate import router as generate_router
+from app.routers.judge import router as judge_router
 from app.routers.quality import router as quality_router
 from app.routers.system import router as system_router
 from app.quality_memory import ensure_quality_memory_schema
@@ -29,6 +30,7 @@ app.add_exception_handler(Exception, generic_error_handler)
 app.include_router(system_router)
 app.include_router(generate_router)
 app.include_router(generation_router)
+app.include_router(judge_router)
 app.include_router(quality_router)
 
 

@@ -116,3 +116,12 @@ def test_explicit_output_spec_not_overridden_by_legacy_defaults() -> None:
     assert spec.length.min_words == 60
     assert spec.length.max_words == 110
     assert spec.structure.items is None
+
+
+def test_cultural_context_alias_normalization() -> None:
+    """Hyphenated cultural context aliases should normalize to enum values."""
+
+    payload = GenerateSingleRequest.model_validate(
+        base_single_payload(cultural_context="south-indian")
+    )
+    assert payload.cultural_context == "south_indian"

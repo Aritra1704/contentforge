@@ -26,8 +26,8 @@ def base_payload(**overrides) -> dict:
     return payload
 
 
-def test_quality_score_one_liner_format_compliance_passes_exact_shape() -> None:
-    """One-liner outputs with exact line count should score full format compliance."""
+def test_quality_score_one_liner_task_fit_passes_exact_shape() -> None:
+    """One-liner outputs with exact line count should score high task fit."""
 
     request = GenerateSingleRequest.model_validate(
         base_payload(output_spec={"format": "one_liner", "structure": {"items": 3}})
@@ -44,8 +44,8 @@ def test_quality_score_one_liner_format_compliance_passes_exact_shape() -> None:
 
     quality, is_valid = score_quality(request, output)
     assert is_valid is True
-    assert quality.format_compliance == 30
-    assert quality.total >= 60
+    assert quality.task_fit >= 20
+    assert quality.total >= 55
 
 
 def test_quality_score_hard_penalty_for_wrong_structure() -> None:
@@ -62,7 +62,7 @@ def test_quality_score_hard_penalty_for_wrong_structure() -> None:
 
     quality, is_valid = score_quality(request, output)
     assert is_valid is False
-    assert quality.format_compliance == 0
+    assert quality.task_fit == 0
     assert any(reason.startswith("Hard penalty:") for reason in quality.reasons)
 
 
@@ -70,20 +70,22 @@ def test_pick_quality_winner_ignores_latency() -> None:
     """Winner selection must prefer higher total quality even when slower."""
 
     high_quality = QualityScore(
-        format_compliance=30,
-        tone_alignment=18,
+        task_fit=24,
         originality=17,
-        clarity_coherence=17,
+        emotional_authenticity=18,
+        completeness=14,
+        clarity_and_flow=9,
         policy_cleanliness=10,
         total=92,
         reasons=["Strong quality across dimensions."],
         warnings=[],
     )
     low_quality = QualityScore(
-        format_compliance=30,
-        tone_alignment=12,
+        task_fit=19,
         originality=8,
-        clarity_coherence=11,
+        emotional_authenticity=10,
+        completeness=8,
+        clarity_and_flow=6,
         policy_cleanliness=10,
         total=71,
         reasons=["Quality is acceptable but repetitive."],
@@ -113,3 +115,46 @@ def test_pick_quality_winner_ignores_latency() -> None:
     assert winner is not None
     assert winner.model == "slow-high-quality"
     assert winner.total_score == 92
+
+
+def test_bland_generic_penalty_triggers_for_template_phrasing() -> None:
+    """Generic greeting templates should receive bland penalty deductions."""
+
+    request = GenerateSingleRequest.model_validate(
+        base_payload(output_spec={"format": "one_liner", "structure": {"items": 3}})
+    )
+    bland_output = GeneratedOutput(
+        items=[
+            "Wishing you joy and love on your special day.",
+            "Wishing you joy and love on your special day.",
+            "Wishing you joy and love on your special day.",
+        ],
+        raw_text=None,
+        structured_output=None,
+    )
+
+    quality, _ = score_quality(request, bland_output)
+    assert quality.bland_generic_penalty > 0
+    assert quality.total < 60
+
+
+def test_incomplete_paragraph_is_invalid_for_winner_selection() -> None:
+    """Paragraph outputs with abrupt endings must not be winner-eligible."""
+
+    request = GenerateSingleRequest.model_validate(
+        base_payload(output_spec={"format": "paragraph"})
+    )
+    incomplete_output = GeneratedOutput(
+        items=[],
+        raw_text=(
+            "A gentle note can steady a rushed day for everyone involved. "
+            "Shared gratitude helps conversations stay warm and practical. "
+            "Small details make people feel seen and"
+        ),
+        structured_output=None,
+    )
+
+    quality, is_valid = score_quality(request, incomplete_output)
+    assert is_valid is False
+    assert quality.incomplete_ending_penalty > 0
+    assert any(reason.startswith("Hard penalty:") for reason in quality.reasons)

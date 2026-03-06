@@ -16,7 +16,6 @@ from app.schemas import JudgeCandidateScore, JudgeResult
 logger = logging.getLogger(__name__)
 
 OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
-OPENAI_TIMEOUT_SEC = 20.0
 OPENAI_MAX_ATTEMPTS = 3  # initial call + 2 retries
 
 try:  # pragma: no cover - optional dependency path
@@ -78,21 +77,57 @@ def build_openai_judge_messages(
     output_spec = context.get("output_spec") or {}
     output_spec_text = json.dumps(output_spec, ensure_ascii=True)
     output_format = context.get("output_format", "one_liner")
+    tone_settings = context.get("tone_settings") or {
+        "tone_funny_pct": context.get("tone_funny_pct", 0),
+        "tone_emotion_pct": context.get("tone_emotion_pct", 0),
+        "tone_style": context.get("tone_style", "conversational"),
+        "emoji_policy": context.get("emoji_policy", "none"),
+    }
+    tone_settings_text = json.dumps(tone_settings, ensure_ascii=True)
+    request_context = context.get("request_context") or {}
+    request_context_text = json.dumps(request_context, ensure_ascii=True)
+    cultural_context = str(context.get("cultural_context", context.get("culture", "global"))).strip() or "global"
 
     system_prompt = (
-        "You are a strict quality judge for generated content.\n"
+        "You are an expert editorial judge for creative content.\n"
+        "Your job is to evaluate outputs for:\n"
+        "- human feel\n"
+        "- originality\n"
+        "- emotional authenticity\n"
+        "- completeness\n"
+        "- tone match\n"
+        "- audience fit\n"
+        "- usefulness as publishable content\n"
+        "\n"
+        "Important:\n"
+        "- Do NOT reward speed.\n"
+        "- Do NOT reward shorter output unless brevity was requested.\n"
+        "- Penalize bland, generic, template-like writing.\n"
+        "- Penalize incomplete endings or abrupt paragraphs.\n"
+        "- Penalize outputs that feel like default AI greeting text.\n"
+        "\n"
         "Output strict JSON only, with no prose before or after JSON."
     )
 
     user_prompt = (
         "Evaluate candidates for quality against prompt requirements.\n"
-        "Assess quality for intended use and non-genericness.\n"
-        "Do NOT rank by latency/speed. Do NOT prefer shorter/longer unless format demands it.\n"
+        "Rank by writing quality and task fit, not speed or superficial cleanliness.\n"
+        "Task fit must include alignment with requested cultural_context when relevant.\n"
+        "Which output is more human and less bland?\n"
+        "Which output best matches requested format and tone?\n"
+        "Which output feels complete and usable?\n"
+        "If one output is structurally clean but emotionally bland, and another is slightly imperfect "
+        "but much stronger creatively, prefer the stronger creative output if it remains usable.\n"
+        "Do NOT rank by latency/speed.\n"
+        "Do NOT use word count as a proxy for quality unless the requested format requires length constraints.\n"
         "If avoid_cliches=true, explicitly check compliance with the avoid phrase list.\n"
         "\nPrompt requirements:\n"
+        f"- Full request context JSON: {request_context_text}\n"
         f"- Theme: {context.get('theme_name', '')}\n"
         f"- Keywords: {keyword_text}\n"
         f"- Audience: {context.get('audience', 'general')}\n"
+        f"- Cultural context: {cultural_context}\n"
+        f"- Tone settings: {tone_settings_text}\n"
         f"- Tone funny pct: {context.get('tone_funny_pct', 0)}\n"
         f"- Tone emotion pct: {context.get('tone_emotion_pct', 0)}\n"
         f"- Tone style: {context.get('tone_style', 'conversational')}\n"
@@ -109,14 +144,15 @@ def build_openai_judge_messages(
         '  "ranking": ["<candidate_key>", "<candidate_key>"],\n'
         '  "scores": {\n'
         '    "<candidate_key>": {\n'
-        '      "format_compliance": 0,\n'
-        '      "tone_alignment": 0,\n'
+        '      "task_fit": 0,\n'
         '      "originality": 0,\n'
-        '      "clarity_coherence": 0,\n'
+        '      "emotional_authenticity": 0,\n'
+        '      "completeness": 0,\n'
+        '      "clarity_and_flow": 0,\n'
         '      "policy_cleanliness": 0,\n'
         '      "total": 0,\n'
-        '      "reasons": ["..."],\n'
-        '      "violations": ["..."]\n'
+        '      "reason": "...",\n'
+        '      "issues": ["..."]\n'
         "    }\n"
         "  }\n"
         "}\n"
@@ -165,23 +201,59 @@ def parse_openai_judge_result(content: str, candidate_keys: list[str]) -> JudgeR
         if not isinstance(entry, dict):
             entry = {}
 
+        # New schema fields.
+        task_fit = _clamp(_safe_int(entry.get("task_fit", 0)), low=0, high=25)
+        originality = _clamp(_safe_int(entry.get("originality", 0)), low=0, high=20)
+        emotional_authenticity = _clamp(_safe_int(entry.get("emotional_authenticity", 0)), low=0, high=20)
+        completeness = _clamp(_safe_int(entry.get("completeness", 0)), low=0, high=15)
+        clarity_and_flow = _clamp(_safe_int(entry.get("clarity_and_flow", 0)), low=0, high=10)
+        policy_cleanliness = _clamp(_safe_int(entry.get("policy_cleanliness", 0)), low=0, high=10)
+
+        # Backward-compatible parsing of legacy fields.
         format_compliance = _clamp(_safe_int(entry.get("format_compliance", 0)), low=0, high=30)
         tone_alignment = _clamp(_safe_int(entry.get("tone_alignment", 0)), low=0, high=20)
-        originality = _clamp(_safe_int(entry.get("originality", 0)), low=0, high=20)
         clarity_coherence = _clamp(_safe_int(entry.get("clarity_coherence", 0)), low=0, high=20)
-        policy_cleanliness = _clamp(_safe_int(entry.get("policy_cleanliness", 0)), low=0, high=10)
-        computed_total = format_compliance + tone_alignment + originality + clarity_coherence + policy_cleanliness
+        if task_fit == 0 and (format_compliance > 0 or tone_alignment > 0):
+            task_fit = _clamp(int(round((format_compliance + tone_alignment) / 2)), low=0, high=25)
+        if emotional_authenticity == 0 and tone_alignment > 0:
+            emotional_authenticity = tone_alignment
+        if clarity_and_flow == 0 and clarity_coherence > 0:
+            clarity_and_flow = _clamp(int(round(clarity_coherence / 2)), low=0, high=10)
+
+        reason = str(entry.get("reason", "")).strip()
+        issues = _normalize_string_list(entry.get("issues"))
+        reasons = _normalize_string_list(entry.get("reasons"))
+        violations = _normalize_string_list(entry.get("violations"))
+        if not reason and reasons:
+            reason = reasons[0]
+        if not issues and violations:
+            issues = list(violations)
+
+        computed_total = (
+            task_fit
+            + originality
+            + emotional_authenticity
+            + completeness
+            + clarity_and_flow
+            + policy_cleanliness
+        )
         total = _clamp(_safe_int(entry.get("total", computed_total), computed_total), low=0, high=100)
 
         scores[candidate_key] = JudgeCandidateScore(
-            format_compliance=format_compliance,
-            tone_alignment=tone_alignment,
+            task_fit=task_fit,
             originality=originality,
-            clarity_coherence=clarity_coherence,
+            emotional_authenticity=emotional_authenticity,
+            completeness=completeness,
+            clarity_and_flow=clarity_and_flow,
             policy_cleanliness=policy_cleanliness,
             total=total,
-            reasons=_normalize_string_list(entry.get("reasons")),
-            violations=_normalize_string_list(entry.get("violations")),
+            reason=reason,
+            issues=issues,
+            format_compliance=format_compliance,
+            tone_alignment=tone_alignment,
+            clarity_coherence=clarity_coherence,
+            reasons=reasons,
+            violations=violations,
         )
 
     return JudgeResult(winner_key=winner_key, ranking=ranking, scores=scores)
@@ -201,6 +273,12 @@ def _backoff_seconds(attempt_index: int) -> float:
     return 0.5 * (2**attempt_index)
 
 
+def _openai_timeout() -> httpx.Timeout:
+    """Return OpenAI judge timeout config from environment-backed settings."""
+
+    return httpx.Timeout(settings.judge_timeout_sec, connect=settings.judge_connect_timeout_sec)
+
+
 async def _call_openai_rest(messages: list[dict[str, str]]) -> str:
     """Call OpenAI Chat Completions API via HTTP REST."""
 
@@ -217,7 +295,7 @@ async def _call_openai_rest(messages: list[dict[str, str]]) -> str:
 
     for attempt in range(OPENAI_MAX_ATTEMPTS):
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(OPENAI_TIMEOUT_SEC)) as client:
+            async with httpx.AsyncClient(timeout=_openai_timeout()) as client:
                 response = await client.post(
                     OPENAI_CHAT_COMPLETIONS_URL,
                     headers=headers,
@@ -255,7 +333,7 @@ async def _call_openai_sdk(messages: list[dict[str, str]]) -> str:
     """Call OpenAI Chat Completions via official SDK when available."""
 
     assert AsyncOpenAI is not None
-    client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=OPENAI_TIMEOUT_SEC)
+    client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=settings.judge_timeout_sec)
     request_body: dict[str, Any] = {
         "model": settings.openai_judge_model,
         "messages": messages,
@@ -299,10 +377,12 @@ async def judge_candidates(context: dict[str, Any], candidates: dict[str, str]) 
 
     messages = build_openai_judge_messages(context, candidates)
     logger.info(
-        "judge_openai_request model=%s candidate_count=%s candidates=%s",
+        "judge_openai_request model=%s candidate_count=%s candidates=%s timeout_sec=%s connect_timeout_sec=%s",
         settings.openai_judge_model,
         len(candidate_keys),
         ",".join(candidate_keys),
+        settings.judge_timeout_sec,
+        settings.judge_connect_timeout_sec,
     )
 
     if AsyncOpenAI is not None:

@@ -130,6 +130,9 @@ def reload_app(
     openai_api_key: str = "",
     openai_judge_model: str = "gpt-4o-mini",
     judge_tie_threshold: str = "7",
+    judge_timeout_sec: str = "120",
+    judge_connect_timeout_sec: str = "10",
+    judge_fallback_to_baseline: str = "true",
 ):
     """Reload the app package against a clean environment snapshot."""
 
@@ -152,6 +155,9 @@ def reload_app(
     monkeypatch.setenv("OPENAI_API_KEY", openai_api_key)
     monkeypatch.setenv("OPENAI_JUDGE_MODEL", openai_judge_model)
     monkeypatch.setenv("JUDGE_TIE_THRESHOLD", judge_tie_threshold)
+    monkeypatch.setenv("JUDGE_TIMEOUT_SEC", judge_timeout_sec)
+    monkeypatch.setenv("JUDGE_CONNECT_TIMEOUT_SEC", judge_connect_timeout_sec)
+    monkeypatch.setenv("JUDGE_FALLBACK_TO_BASELINE", judge_fallback_to_baseline)
     monkeypatch.setenv("QUALITY_MEMORY_ENABLED", "false")
     monkeypatch.setenv("QUALITY_MEMORY_DSN", "")
 
@@ -161,7 +167,12 @@ def reload_app(
         monkeypatch.setenv("GROQ_API_KEY", groq_api_key)
 
     for module_name in list(sys.modules):
-        if module_name == "app" or module_name.startswith("app."):
+        if (
+            module_name == "app"
+            or module_name.startswith("app.")
+            or module_name == "src"
+            or module_name.startswith("src.")
+        ):
             sys.modules.pop(module_name, None)
 
     importlib.invalidate_caches()
@@ -931,6 +942,113 @@ async def test_compare_models_winner_is_quality_first_not_latency(monkeypatch) -
 
 
 @pytest.mark.asyncio
+async def test_compare_models_bland_groq_loses_to_more_human_output(monkeypatch) -> None:
+    """Bland generic Groq output should lose against stronger human-sounding content."""
+
+    main_module, llm_module = reload_app(monkeypatch)
+    FakeAsyncClient.reset()
+    configure_default_payloads()
+    FakeAsyncClient.post_payloads["qwen2.5:7b-instruct"] = {
+        "message": {
+            "content": "\n".join(
+                [
+                    "Your steady care turns hard days into shared strength.",
+                    "Family gratitude lands deeper when the words sound honest.",
+                    "Tonight we hold each other close and keep moving with hope.",
+                ]
+            )
+        }
+    }
+    FakeAsyncClient.post_payloads["llama-3.3-70b-versatile"] = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "items": [
+                                "Wishing you joy and love on your special day.",
+                                "On your special day, may your heart be filled with joy and love.",
+                                "Wishing you warmth, happiness, and beautiful memories today.",
+                            ]
+                        }
+                    )
+                }
+            }
+        ]
+    }
+    monkeypatch.setattr(llm_module, "AsyncClient", FakeAsyncClient)
+
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/generate/compare-models",
+            json=compare_payload(
+                output_spec={"format": "one_liner", "structure": {"items": 3, "no_numbering": True}}
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["winner"] is not None
+    assert payload["winner"]["model"] == "qwen2.5:7b-instruct"
+    assert payload["winner_source"] == "baseline"
+    assert payload["why_winner"]
+
+    results_by_model = {item["model"]: item for item in payload["results"]}
+    assert results_by_model["llama-3.3-70b-versatile"]["quality"]["bland_generic_penalty"] > 0
+
+
+@pytest.mark.asyncio
+async def test_compare_models_incomplete_paragraph_cannot_win(monkeypatch) -> None:
+    """Incomplete paragraph output should be ineligible and should not win."""
+
+    main_module, llm_module = reload_app(monkeypatch)
+    FakeAsyncClient.reset()
+    configure_default_payloads()
+    FakeAsyncClient.post_payloads["qwen2.5:7b-instruct"] = {
+        "message": {
+            "content": (
+                "A thoughtful note can calm a tense morning and make people feel seen. "
+                "Gratitude works best when the language is specific and grounded in real moments. "
+                "Clear phrasing keeps the tone warm without sounding generic. "
+                "That balance helps the message feel complete and ready to send."
+            )
+        }
+    }
+    FakeAsyncClient.post_payloads["llama-3.3-70b-versatile"] = {
+        "choices": [
+            {
+                "message": {
+                    "content": (
+                        "A thoughtful note can calm a tense morning and make people feel seen. "
+                        "Gratitude works best when the language is specific and grounded in real moments. "
+                        "Clear phrasing keeps the tone warm and"
+                    )
+                }
+            }
+        ]
+    }
+    monkeypatch.setattr(llm_module, "AsyncClient", FakeAsyncClient)
+
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/generate/compare-models",
+            json=compare_payload(output_spec={"format": "paragraph"}),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["winner"] is not None
+    assert payload["winner"]["model"] == "qwen2.5:7b-instruct"
+
+    results_by_model = {item["model"]: item for item in payload["results"]}
+    groq_quality = results_by_model["llama-3.3-70b-versatile"]["quality"]
+    assert groq_quality["incomplete_ending_penalty"] > 0
+    assert any(reason.startswith("Hard penalty:") for reason in groq_quality["reasons"])
+
+
+@pytest.mark.asyncio
 async def test_compare_models_uses_judge_winner_when_enabled(monkeypatch) -> None:
     """When judge is enabled in always mode, final winner should follow judge_result winner."""
 
@@ -973,24 +1091,26 @@ async def test_compare_models_uses_judge_winner_when_enabled(monkeypatch) -> Non
                     "ranking": ["modelB", "modelA"],
                     "scores": {
                         "modelB": {
-                            "format_compliance": 30,
-                            "tone_alignment": 17,
+                            "task_fit": 24,
                             "originality": 18,
-                            "clarity_coherence": 17,
+                            "emotional_authenticity": 17,
+                            "completeness": 14,
+                            "clarity_and_flow": 9,
                             "policy_cleanliness": 10,
                             "total": 92,
-                            "reasons": ["More original and clearer."],
-                            "violations": [],
+                            "reason": "More original and clearer.",
+                            "issues": [],
                         },
                         "modelA": {
-                            "format_compliance": 30,
-                            "tone_alignment": 12,
+                            "task_fit": 17,
                             "originality": 10,
-                            "clarity_coherence": 12,
+                            "emotional_authenticity": 12,
+                            "completeness": 10,
+                            "clarity_and_flow": 8,
                             "policy_cleanliness": 10,
                             "total": 74,
-                            "reasons": ["Less original."],
-                            "violations": ["cliche"],
+                            "reason": "Less original.",
+                            "issues": ["cliche"],
                         },
                     },
                 }
@@ -1017,7 +1137,7 @@ async def test_compare_models_uses_judge_winner_when_enabled(monkeypatch) -> Non
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["winner_source"] == "judge_ollama"
+    assert payload["winner_source"] == "judge"
     assert payload["judge_result"] is not None
     assert payload["judge_result"]["winner_key"] == "modelB"
     assert payload["judge_json"] is not None
@@ -1043,7 +1163,7 @@ async def test_compare_models_uses_judge_winner_when_enabled(monkeypatch) -> Non
     judge_messages = judge_calls[0]["json"]["messages"]
     combined_prompt = "\n".join(str(message.get("content", "")) for message in judge_messages)
     assert "Do NOT rank by latency/speed." in combined_prompt
-    assert "Do NOT prefer shorter/longer unless format demands it." in combined_prompt
+    assert "Do NOT use word count as a proxy for quality" in combined_prompt
 
 
 def test_judge_prompt_includes_speed_and_requirements(monkeypatch) -> None:
@@ -1066,14 +1186,16 @@ def test_judge_prompt_includes_speed_and_requirements(monkeypatch) -> None:
                 {"backend": "ollama", "model": "qwen2.5:7b-instruct"},
                 {"backend": "ollama", "model": "mistral:7b"},
             ],
+            cultural_context="bengali",
             output_spec={"format": "one_liner", "structure": {"items": 3}},
         )
     )
     score = schemas_module.QualityScore(
-        format_compliance=30,
-        tone_alignment=15,
+        task_fit=22,
         originality=14,
-        clarity_coherence=15,
+        emotional_authenticity=15,
+        completeness=13,
+        clarity_and_flow=8,
         policy_cleanliness=9,
         total=83,
         reasons=[],
@@ -1099,8 +1221,12 @@ def test_judge_prompt_includes_speed_and_requirements(monkeypatch) -> None:
     messages = judge_module.build_judge_messages(payload, candidate_map)
     combined_prompt = "\n".join(str(message.get("content", "")) for message in messages)
     assert "Do NOT rank by latency/speed." in combined_prompt
-    assert "Do NOT prefer shorter/longer unless format demands it." in combined_prompt
-    assert "Assess quality for intended use and non-genericness." in combined_prompt
+    assert "Do NOT use word count as a proxy for quality" in combined_prompt
+    assert "Rank by writing quality and task fit, not speed or superficial cleanliness." in combined_prompt
+    assert "Task fit must include alignment with requested cultural_context when relevant." in combined_prompt
+    assert "If one output is structurally clean but emotionally bland" in combined_prompt
+    assert "Full request context JSON:" in combined_prompt
+    assert "Cultural context: bengali" in combined_prompt
     assert "Output format:" in combined_prompt
 
 
@@ -1155,24 +1281,26 @@ async def test_compare_models_tie_break_uses_openai_judge(monkeypatch) -> None:
                 "ranking": ["modelB", "modelA"],
                 "scores": {
                     "modelA": {
-                        "format_compliance": 30,
-                        "tone_alignment": 16,
+                        "task_fit": 22,
                         "originality": 15,
-                        "clarity_coherence": 16,
+                        "emotional_authenticity": 16,
+                        "completeness": 13,
+                        "clarity_and_flow": 9,
                         "policy_cleanliness": 10,
                         "total": 87,
-                        "reasons": ["Good quality."],
-                        "violations": [],
+                        "reason": "Good quality.",
+                        "issues": [],
                     },
                     "modelB": {
-                        "format_compliance": 30,
-                        "tone_alignment": 17,
+                        "task_fit": 24,
                         "originality": 18,
-                        "clarity_coherence": 17,
+                        "emotional_authenticity": 17,
+                        "completeness": 14,
+                        "clarity_and_flow": 9,
                         "policy_cleanliness": 10,
                         "total": 92,
-                        "reasons": ["More original and clearer."],
-                        "violations": [],
+                        "reason": "More original and clearer.",
+                        "issues": [],
                     },
                 },
             }
@@ -1194,7 +1322,7 @@ async def test_compare_models_tie_break_uses_openai_judge(monkeypatch) -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["winner_source"] == "judge_openai"
+    assert payload["winner_source"] == "judge"
     assert payload["judge_result"] is not None
     assert payload["judge_result"]["winner_key"] == "modelB"
     assert payload["winner"]["model"] == "mistral:7b"
@@ -1311,24 +1439,26 @@ async def test_compare_models_openai_disabled_uses_default_ollama_judge(monkeypa
                     "ranking": ["modelB", "modelA"],
                     "scores": {
                         "modelA": {
-                            "format_compliance": 30,
-                            "tone_alignment": 16,
+                            "task_fit": 22,
                             "originality": 15,
-                            "clarity_coherence": 16,
+                            "emotional_authenticity": 16,
+                            "completeness": 13,
+                            "clarity_and_flow": 9,
                             "policy_cleanliness": 10,
                             "total": 87,
-                            "reasons": ["Good quality."],
-                            "violations": [],
+                            "reason": "Good quality.",
+                            "issues": [],
                         },
                         "modelB": {
-                            "format_compliance": 30,
-                            "tone_alignment": 17,
+                            "task_fit": 24,
                             "originality": 18,
-                            "clarity_coherence": 17,
+                            "emotional_authenticity": 17,
+                            "completeness": 14,
+                            "clarity_and_flow": 9,
                             "policy_cleanliness": 10,
                             "total": 92,
-                            "reasons": ["More original and clearer."],
-                            "violations": [],
+                            "reason": "More original and clearer.",
+                            "issues": [],
                         },
                     },
                 }
@@ -1358,6 +1488,6 @@ async def test_compare_models_openai_disabled_uses_default_ollama_judge(monkeypa
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["winner_source"] == "judge_ollama"
+    assert payload["winner_source"] == "judge"
     assert payload["judge_result"] is not None
     assert payload["judge_result"]["winner_key"] == "modelB"
