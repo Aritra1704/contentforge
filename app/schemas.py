@@ -541,6 +541,33 @@ class JudgeResult(BaseModel):
     scores: dict[str, JudgeCandidateScore] = Field(default_factory=dict)
 
 
+class RankedTextCandidate(BaseModel):
+    """One ranked text candidate derived from compare-model outputs."""
+
+    model_config = {"protected_namespaces": ()}
+
+    backend: BackendName
+    model: str
+    text: str = Field(min_length=1)
+    source_item_index: int = Field(default=0, ge=0)
+    rank: int = Field(default=1, ge=1)
+    score: float = Field(default=0.0, ge=0)
+    model_score: int = Field(default=0, ge=0, le=100)
+    reason: str = ""
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+class CandidateRankingSummary(BaseModel):
+    """Summary counts for candidate filtering and ranking."""
+
+    total_candidates_seen: int = Field(default=0, ge=0)
+    ranked_candidate_count: int = Field(default=0, ge=0)
+    shortlisted_count: int = Field(default=0, ge=0)
+    rejected_duplicate_count: int = Field(default=0, ge=0)
+    rejected_incomplete_count: int = Field(default=0, ge=0)
+    rejected_invalid_count: int = Field(default=0, ge=0)
+
+
 class RoundRobinPromptContext(BaseModel):
     """Prompt context shared by all pairwise judge comparisons."""
 
@@ -670,6 +697,9 @@ class GenerateCompareModelsResponse(BaseModel):
 
     ok: bool
     results: list[CompareModelResult]
+    ranked_candidates: list[RankedTextCandidate] = Field(default_factory=list)
+    shortlist: list[RankedTextCandidate] = Field(default_factory=list)
+    ranking_summary: CandidateRankingSummary = Field(default_factory=CandidateRankingSummary)
     winner: CompareModelsWinner | None = None
     winner_source: WinnerSource = "baseline"
     judge_result: JudgeResult | None = None

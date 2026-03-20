@@ -1041,11 +1041,74 @@ async def test_compare_models_incomplete_paragraph_cannot_win(monkeypatch) -> No
     payload = response.json()
     assert payload["winner"] is not None
     assert payload["winner"]["model"] == "qwen2.5:7b-instruct"
+    assert payload["ranking_summary"]["rejected_incomplete_count"] == 1
+    assert len(payload["shortlist"]) == 1
+    assert payload["shortlist"][0]["text"].startswith("A thoughtful note can calm a tense morning")
+    assert payload["shortlist"][0]["reason_codes"]
 
     results_by_model = {item["model"]: item for item in payload["results"]}
     groq_quality = results_by_model["llama-3.3-70b-versatile"]["quality"]
     assert groq_quality["incomplete_ending_penalty"] > 0
     assert any(reason.startswith("Hard penalty:") for reason in groq_quality["reasons"])
+
+
+@pytest.mark.asyncio
+async def test_compare_models_returns_ranked_candidates_with_reasons_and_dedupes_aggressively(monkeypatch) -> None:
+    """Compare-models should emit a deduped ranked candidate list with shortlist reasons."""
+
+    main_module, llm_module = reload_app(monkeypatch)
+    FakeAsyncClient.reset()
+    configure_default_payloads()
+    FakeAsyncClient.post_payloads["qwen2.5:7b-instruct"] = {
+        "message": {
+            "content": "\n".join(
+                [
+                    "May your day glow with calm, color, and easy laughter.",
+                    "Sending bright Holi joy into every room you enter today.",
+                    "Warm Holi wishes and",
+                ]
+            )
+        }
+    }
+    FakeAsyncClient.post_payloads["mistral:7b"] = {
+        "message": {
+            "content": "\n".join(
+                [
+                    "May your day glow with calm, color, and easy laughter!",
+                    "Let Holi land softly with color, warmth, and togetherness.",
+                    "Sending bright Holi joy into every room you enter today.",
+                ]
+            )
+        }
+    }
+    monkeypatch.setattr(llm_module, "AsyncClient", FakeAsyncClient)
+
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/generate/compare-models",
+            json=compare_payload(
+                targets=[
+                    {"backend": "ollama", "model": "qwen2.5:7b-instruct"},
+                    {"backend": "ollama", "model": "mistral:7b"},
+                ],
+                output_spec={"format": "one_liner", "structure": {"items": 3, "no_numbering": True}},
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    ranked_texts = [item["text"] for item in payload["ranked_candidates"]]
+    shortlist = payload["shortlist"]
+
+    assert "Warm Holi wishes and" not in ranked_texts
+    assert ranked_texts.count("May your day glow with calm, color, and easy laughter.") == 1
+    assert ranked_texts.count("Sending bright Holi joy into every room you enter today.") == 1
+    assert payload["ranking_summary"]["rejected_incomplete_count"] == 1
+    assert payload["ranking_summary"]["rejected_duplicate_count"] >= 2
+    assert shortlist
+    assert all(entry["reason_codes"] for entry in shortlist)
+    assert all(entry["reason"] for entry in shortlist)
 
 
 @pytest.mark.asyncio

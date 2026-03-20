@@ -9,6 +9,7 @@ from time import perf_counter
 from fastapi import APIRouter, Request
 
 from app.busy import BusyError, BusyManager
+from app.candidate_ranking import build_ranked_candidates
 from app.config import settings
 from app.errors import AppError, BusyServiceError
 from app.judge import run_llm_judge
@@ -312,6 +313,7 @@ async def compare_models(
     judge_result = None
     judge_json = None
     judge_reason: str | None = None
+    judge_candidate_map: dict[str, CompareModelResult] = {}
     winner_source = "baseline"
     why_winner = baseline_winner_why(results, baseline_winner)
 
@@ -327,6 +329,7 @@ async def compare_models(
         if should_run_judge:
             judge_run = await run_llm_judge(payload, results)
             judge_result = judge_run.decision
+            judge_candidate_map = dict(judge_run.candidate_map)
             if judge_run.decision is None:
                 judge_reason = judge_run.reason
             else:
@@ -349,6 +352,12 @@ async def compare_models(
         elif settings.judge_mode == "tie_break":
             judge_reason = "Judge skipped: baseline lead exceeded tie threshold."
 
+    ranked_candidates, shortlist, ranking_summary = build_ranked_candidates(
+        payload,
+        results,
+        judge_result=judge_result,
+        judge_candidate_map=judge_candidate_map,
+    )
     judge_result_payload = judge_result.model_dump(mode="json") if judge_result is not None else None
     judge_json_payload = judge_result_payload
     for result in results:
@@ -366,6 +375,9 @@ async def compare_models(
     return GenerateCompareModelsResponse(
         ok=all(item.ok for item in results),
         results=results,
+        ranked_candidates=ranked_candidates,
+        shortlist=shortlist,
+        ranking_summary=ranking_summary,
         winner=final_winner,
         winner_source=winner_source,
         judge_result=judge_result_payload,
