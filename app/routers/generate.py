@@ -37,6 +37,7 @@ from app.schemas import (
     GenerateSingleResponse,
     ResponseMeta,
 )
+from src.prompts.phrase_prompt import selected_voice_pack
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/generate", tags=["generate"])
@@ -71,10 +72,13 @@ def applied_settings(payload: GenerateSingleRequest | GenerateCompareModelsReque
         max_words = payload.output_spec.length.max_words
 
     return {
+        "app_id": payload.app_id,
+        "content_type": payload.content_type,
         "max_words": max_words,
         "emoji_policy": payload.emoji_policy,
         "tone_style": payload.tone_style,
         "avoid_cliches": payload.avoid_cliches,
+        "voice_pack": selected_voice_pack(build_single_request(payload, payload.targets[0])) if isinstance(payload, GenerateCompareModelsRequest) else selected_voice_pack(payload),
     }
 
 
@@ -85,6 +89,8 @@ def build_single_request(
     """Expand one compare target into the single-generation request model."""
 
     return GenerateSingleRequest(
+        app_id=shared.app_id,
+        content_type=shared.content_type,
         theme_name=shared.theme_name,
         tone_funny_pct=shared.tone_funny_pct,
         tone_emotion_pct=shared.tone_emotion_pct,
@@ -105,6 +111,7 @@ def build_single_request(
         avoid_phrases=shared.avoid_phrases,
         output_format=shared.output_format,
         output_spec=shared.output_spec.model_copy(deep=True) if shared.output_spec is not None else None,
+        creative_brief=shared.creative_brief.model_copy(deep=True) if shared.creative_brief is not None else None,
         trace_id=shared.trace_id,
         seed=shared.seed,
     )

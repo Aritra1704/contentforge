@@ -1,0 +1,249 @@
+[
+  {
+    "id": "ecard_valentine_romantic_witty_01",
+    "app_id": "ecard_factory",
+    "content_type": "ecard_message",
+    "theme_name": "Valentine Special",
+    "tone_style": "witty",
+    "prompt_keywords": ["love", "date night", "warmth"],
+    "creative_brief": {
+      "voice_pack": "romantic_witty",
+      "desired_emotional_effect": "playful intimacy"
+    }
+  },
+  {
+    "id": "ecard_valentine_minimal_02",
+    "app_id": "ecard_factory",
+    "content_type": "ecard_message",
+    "theme_name": "Valentine Special",
+    "tone_style": "minimal",
+    "prompt_keywords": ["love", "gentle", "quiet"],
+    "creative_brief": {
+      "voice_pack": "minimal_heartfelt",
+      "desired_emotional_effect": "soft sincerity"
+    }
+  },
+  {
+    "id": "ecard_holi_playful_03",
+    "app_id": "ecard_factory",
+    "content_type": "ecard_message",
+    "theme_name": "Holi Week",
+    "tone_style": "conversational",
+    "prompt_keywords": ["color", "joy", "friends"],
+    "creative_brief": {
+      "voice_pack": "festival_warm",
+      "desired_emotional_effect": "bright celebration"
+    }
+  },
+  {
+    "id": "ecard_holi_family_04",
+    "app_id": "ecard_factory",
+    "content_type": "ecard_message",
+    "theme_name": "Holi Week",
+    "tone_style": "inspirational",
+    "prompt_keywords": ["togetherness", "family", "festival"],
+    "creative_brief": {
+      "voice_pack": "festival_warm",
+      "desired_emotional_effect": "shared warmth"
+    }
+  },
+  {
+    "id": "ecard_ramadan_respectful_05",
+    "app_id": "ecard_factory",
+    "content_type": "ecard_message",
+    "theme_name": "Ramadan Month",
+    "tone_style": "minimal",
+    "prompt_keywords": ["grace", "reflection", "dua"],
+    "creative_brief": {
+      "voice_pack": "festival_respectful",
+      "cultural_guardrails": ["avoid slang", "avoid parody"],
+      "desired_emotional_effect": "quiet grace"
+    }
+  },
+  {
+    "id": "ecard_ramadan_family_06",
+    "app_id": "ecard_factory",
+    "content_type": "ecard_message",
+    "theme_name": "Ramadan Month",
+    "tone_style": "conversational",
+    "prompt_keywords": ["family", "gratitude", "peace"],
+    "creative_brief": {
+      "voice_pack": "festival_respectful",
+      "desired_emotional_effect": "calm warmth"
+    }
+  },
+  {
+    "id": "ecard_diwali_glow_07",
+    "app_id": "ecard_factory",
+    "content_type": "ecard_message",
+    "theme_name": "Diwali Week",
+    "tone_style": "poetic",
+    "prompt_keywords": ["light", "home", "celebration"],
+    "creative_brief": {
+      "voice_pack": "festival_warm",
+      "desired_emotional_effect": "radiant joy"
+    }
+  },
+  {
+    "id": "ecard_diwali_modern_08",
+    "app_id": "ecard_factory",
+    "content_type": "ecard_message",
+    "theme_name": "Diwali Week",
+    "tone_style": "witty",
+    "prompt_keywords": ["lights", "laughs", "festive night"],
+    "creative_brief": {
+      "voice_pack": "festival_warm",
+      "desired_emotional_effect": "bright energy"
+    }
+  },
+  {
+    "id": "ecard_eid_respectful_09",
+    "app_id": "ecard_factory",
+    "content_type": "ecard_message",
+    "theme_name": "Eid Celebration",
+    "tone_style": "conversational",
+    "prompt_keywords": ["gratitude", "family", "celebration"],
+    "creative_brief": {
+      "voice_pack": "festival_respectful",
+      "desired_emotional_effect": "respectful joy"
+    }
+  },
+  {
+    "id": "ecard_friendship_playful_10",
+    "app_id": "ecard_factory",
+    "content_type": "ecard_message",
+    "theme_name": "Friendship Day",
+    "tone_style": "witty",
+    "prompt_keywords": ["friend", "banter", "loyalty"],
+    "creative_brief": {
+      "voice_pack": "playful_modern",
+      "desired_emotional_effect": "warm laughter"
+    }
+  },
+  {
+    "id": "ecard_netflix_modern_11",
+    "app_id": "ecard_factory",
+    "content_type": "ecard_message",
+    "theme_name": "Netflix and Chill",
+    "tone_style": "witty",
+    "prompt_keywords": ["sofa", "movie night", "cozy"],
+    "creative_brief": {
+      "voice_pack": "playful_modern",
+      "desired_emotional_effect": "cozy flirtation"
+    }
+  },
+  {
+    "id": "ecard_netflix_soft_12",
+    "app_id": "ecard_factory",
+    "content_type": "ecard_message",
+    "theme_name": "Netflix and Chill",
+    "tone_style": "conversational",
+    "prompt_keywords": ["blanket", "screen glow", "comfort"],
+    "creative_brief": {
+      "voice_pack": "playful_modern",
+      "desired_emotional_effect": "easy comfort"
+    }
+  },
+  {
+    "id": "story_learning_13",
+    "app_id": "story_factory",
+    "content_type": "learning_story",
+    "theme_name": "A Lesson Under the Banyan Tree",
+    "tone_style": "conversational",
+    "prompt_keywords": ["7 year old", "curiosity", "kindness"],
+    "creative_brief": {
+      "voice_pack": "minimal_heartfelt",
+      "audience_age_band": "6-8",
+      "target_structure": "Setup, Turn, Resolution",
+      "desired_emotional_effect": "gentle learning"
+    }
+  },
+  {
+    "id": "story_twin_girls_14",
+    "app_id": "story_factory",
+    "content_type": "learning_story",
+    "theme_name": "Twin Girls on the Balcony",
+    "tone_style": "minimal",
+    "prompt_keywords": ["siblings", "observation", "rain"],
+    "creative_brief": {
+      "voice_pack": "minimal_heartfelt",
+      "audience_age_band": "6-8",
+      "desired_emotional_effect": "quiet wonder"
+    }
+  },
+  {
+    "id": "thought_day_reflective_15",
+    "app_id": "thought_factory",
+    "content_type": "thought_of_the_day",
+    "theme_name": "Thought of the Day",
+    "tone_style": "inspirational",
+    "prompt_keywords": ["clarity", "purpose", "kindness"],
+    "creative_brief": {
+      "voice_pack": "minimal_heartfelt",
+      "desired_emotional_effect": "steady optimism"
+    }
+  },
+  {
+    "id": "thought_day_witty_16",
+    "app_id": "thought_factory",
+    "content_type": "thought_of_the_day",
+    "theme_name": "Thought of the Day",
+    "tone_style": "witty",
+    "prompt_keywords": ["humor", "life", "perspective"],
+    "creative_brief": {
+      "voice_pack": "playful_modern",
+      "desired_emotional_effect": "light perspective shift"
+    }
+  },
+  {
+    "id": "failure_duplicate_guard_17",
+    "app_id": "ecard_factory",
+    "content_type": "ecard_message",
+    "theme_name": "Generic Celebration",
+    "tone_style": "conversational",
+    "prompt_keywords": ["joy", "celebrate"],
+    "creative_brief": {
+      "voice_pack": "festival_warm",
+      "taboo_phrases": ["wishing you joy and prosperity", "on this special day"],
+      "desired_emotional_effect": "non-cliche warmth"
+    }
+  },
+  {
+    "id": "failure_abrupt_ending_guard_18",
+    "app_id": "ecard_factory",
+    "content_type": "ecard_message",
+    "theme_name": "Launch Milestone",
+    "tone_style": "conversational",
+    "prompt_keywords": ["team", "milestone", "clarity"],
+    "creative_brief": {
+      "voice_pack": "playful_modern",
+      "desired_emotional_effect": "clean completion"
+    }
+  },
+  {
+    "id": "failure_cliche_guard_19",
+    "app_id": "thought_factory",
+    "content_type": "thought_of_the_day",
+    "theme_name": "Thought of the Day",
+    "tone_style": "inspirational",
+    "prompt_keywords": ["resilience", "focus"],
+    "creative_brief": {
+      "voice_pack": "minimal_heartfelt",
+      "taboo_phrases": ["you got this", "shine bright", "make it happen"],
+      "desired_emotional_effect": "grounded encouragement"
+    }
+  },
+  {
+    "id": "failure_tone_match_guard_20",
+    "app_id": "ecard_factory",
+    "content_type": "ecard_message",
+    "theme_name": "Condolence Support",
+    "tone_style": "minimal",
+    "prompt_keywords": ["support", "presence", "care"],
+    "creative_brief": {
+      "voice_pack": "minimal_heartfelt",
+      "taboo_phrases": ["party", "laugh riot"],
+      "desired_emotional_effect": "quiet support"
+    }
+  }
+]

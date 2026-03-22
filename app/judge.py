@@ -80,10 +80,13 @@ def build_judge_context(payload: GenerateCompareModelsRequest) -> dict[str, obje
     request_context = payload.model_dump(mode="json")
     cultural_context = str(payload.cultural_context).strip() or "global"
     return {
+        "app_id": payload.app_id,
+        "content_type": payload.content_type,
         "theme_name": payload.theme_name,
         "keywords": payload.prompt_keywords,
         "audience": payload.audience,
         "cultural_context": cultural_context,
+        "creative_brief": payload.creative_brief.model_dump(mode="json") if payload.creative_brief is not None else None,
         "tone_settings": {
             "tone_funny_pct": payload.tone_funny_pct,
             "tone_emotion_pct": payload.tone_emotion_pct,
@@ -124,6 +127,8 @@ def make_backend_judge_payload(
     """Create one internal request payload for backend judge LLM calls."""
 
     return GenerateSingleRequest(
+        app_id=shared.app_id,
+        content_type=shared.content_type,
         theme_name=shared.theme_name,
         tone_funny_pct=shared.tone_funny_pct,
         tone_emotion_pct=shared.tone_emotion_pct,
@@ -144,6 +149,7 @@ def make_backend_judge_payload(
         avoid_phrases=shared.avoid_phrases,
         output_format="lines",
         output_spec=OutputSpec(format="paragraph"),
+        creative_brief=shared.creative_brief.model_copy(deep=True) if shared.creative_brief is not None else None,
         trace_id=shared.trace_id,
         seed=shared.seed,
     )

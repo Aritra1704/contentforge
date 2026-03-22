@@ -11,6 +11,14 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 BackendName = Literal["ollama", "groq"]
 EmojiPolicy = Literal["none", "light", "expressive"]
 ToneStyle = Literal["minimal", "poetic", "conversational", "witty", "inspirational"]
+CreativeVoicePack = Literal[
+    "auto",
+    "romantic_witty",
+    "festival_warm",
+    "festival_respectful",
+    "playful_modern",
+    "minimal_heartfelt",
+]
 CulturalContext = Literal[
     "global",
     "indian",
@@ -90,6 +98,59 @@ class OutputSpec(BaseModel):
     format: OutputSpecFormat = "one_liner"
     length: OutputLengthSpec = Field(default_factory=OutputLengthSpec)
     structure: OutputStructureSpec = Field(default_factory=OutputStructureSpec)
+
+
+class CreativeBrief(BaseModel):
+    """Thin shared creative brief used across future product apps."""
+
+    tone_blend: dict[str, int] = Field(default_factory=dict)
+    voice_pack: CreativeVoicePack = "auto"
+    audience_age_band: str | None = None
+    cultural_guardrails: list[str] = Field(default_factory=list)
+    taboo_phrases: list[str] = Field(default_factory=list)
+    target_structure: str | None = None
+    desired_emotional_effect: str | None = None
+
+    @field_validator("tone_blend")
+    @classmethod
+    def normalize_tone_blend(cls, value: dict[str, int]) -> dict[str, int]:
+        """Trim tone-blend keys and clamp values into percentages."""
+
+        normalized: dict[str, int] = {}
+        for key, score in value.items():
+            candidate = str(key).strip().lower().replace("-", "_").replace(" ", "_")
+            if not candidate:
+                continue
+            normalized[candidate] = max(0, min(100, int(score)))
+        return normalized
+
+    @field_validator("cultural_guardrails", "taboo_phrases")
+    @classmethod
+    def normalize_string_list(cls, value: list[str]) -> list[str]:
+        """Trim blanks and deduplicate list-style creative brief fields."""
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            candidate = item.strip()
+            if not candidate:
+                continue
+            key = candidate.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(candidate)
+        return normalized
+
+    @field_validator("audience_age_band", "target_structure", "desired_emotional_effect")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        """Trim optional free-text creative brief fields."""
+
+        if value is None:
+            return None
+        candidate = value.strip()
+        return candidate or None
 
 
 def _payload_get(payload: BaseModel | dict[str, Any], key: str) -> Any:
@@ -228,6 +289,8 @@ def normalize_output_spec(payload: BaseModel | dict[str, Any]) -> OutputSpec:
 class GenerateSingleRequest(BaseModel):
     """Request payload for one stateless content generation call."""
 
+    app_id: str = Field(default="ecard_factory", min_length=1)
+    content_type: str = Field(default="ecard_message", min_length=1)
     theme_name: str = Field(min_length=1)
     tone_funny_pct: int = Field(ge=0, le=100)
     tone_emotion_pct: int = Field(ge=0, le=100)
@@ -248,6 +311,7 @@ class GenerateSingleRequest(BaseModel):
     avoid_phrases: list[str] = Field(default_factory=lambda: list(DEFAULT_AVOID_PHRASES))
     output_format: OutputFormat = "numbered"
     output_spec: OutputSpec | None = None
+    creative_brief: CreativeBrief | None = None
     trace_id: str | None = None
     seed: int | None = None
 
@@ -257,6 +321,13 @@ class GenerateSingleRequest(BaseModel):
         """Remove blank keywords before prompt construction."""
 
         return [item.strip() for item in value if item.strip()]
+
+    @field_validator("app_id", "content_type")
+    @classmethod
+    def strip_required_text(cls, value: str) -> str:
+        """Normalize shared-contract string fields."""
+
+        return value.strip()
 
     @field_validator("model")
     @classmethod
@@ -408,6 +479,8 @@ class CompareModelTarget(BaseModel):
 class GenerateCompareModelsRequest(BaseModel):
     """Shared prompt plus multiple backend/model targets."""
 
+    app_id: str = Field(default="ecard_factory", min_length=1)
+    content_type: str = Field(default="ecard_message", min_length=1)
     theme_name: str = Field(min_length=1)
     tone_funny_pct: int = Field(ge=0, le=100)
     tone_emotion_pct: int = Field(ge=0, le=100)
@@ -427,6 +500,7 @@ class GenerateCompareModelsRequest(BaseModel):
     avoid_phrases: list[str] = Field(default_factory=lambda: list(DEFAULT_AVOID_PHRASES))
     output_format: OutputFormat = "numbered"
     output_spec: OutputSpec | None = None
+    creative_brief: CreativeBrief | None = None
     trace_id: str | None = None
     seed: int | None = None
 
@@ -436,6 +510,13 @@ class GenerateCompareModelsRequest(BaseModel):
         """Remove blank keywords before prompt construction."""
 
         return [item.strip() for item in value if item.strip()]
+
+    @field_validator("app_id", "content_type")
+    @classmethod
+    def strip_required_text(cls, value: str) -> str:
+        """Normalize shared-contract string fields."""
+
+        return value.strip()
 
     @field_validator("trace_id")
     @classmethod
@@ -571,6 +652,8 @@ class CandidateRankingSummary(BaseModel):
 class RoundRobinPromptContext(BaseModel):
     """Prompt context shared by all pairwise judge comparisons."""
 
+    app_id: str = Field(default="ecard_factory", min_length=1)
+    content_type: str = Field(default="ecard_message", min_length=1)
     theme_name: str = Field(min_length=1)
     tone_funny_pct: int = Field(ge=0, le=100)
     tone_emotion_pct: int = Field(ge=0, le=100)
@@ -579,6 +662,14 @@ class RoundRobinPromptContext(BaseModel):
     cultural_context: CulturalContext = "global"
     output_spec: OutputSpec = Field(default_factory=OutputSpec)
     avoid_cliches: bool = False
+    creative_brief: CreativeBrief | None = None
+
+    @field_validator("app_id", "content_type")
+    @classmethod
+    def strip_required_text(cls, value: str) -> str:
+        """Normalize shared-contract string fields."""
+
+        return value.strip()
 
     @field_validator("audience")
     @classmethod

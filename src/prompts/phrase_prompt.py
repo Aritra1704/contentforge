@@ -2,7 +2,40 @@
 
 from __future__ import annotations
 
-from app.schemas import GenerateSingleRequest, OutputSpec
+from app.schemas import CreativeBrief, GenerateSingleRequest, OutputSpec
+
+_VOICE_PACK_GUIDANCE = {
+    "romantic_witty": [
+        "Use flirtatious warmth with quick, memorable phrasing.",
+        "Keep the humor charming, not sarcastic or crude.",
+        "Avoid overblown declarations unless explicitly requested.",
+    ],
+    "festival_warm": [
+        "Keep the tone celebratory, warm, and family-friendly.",
+        "Use occasion details naturally without sounding templated.",
+        "Prefer light, image-rich phrasing over generic blessing language.",
+    ],
+    "festival_respectful": [
+        "Keep the tone respectful, gracious, and spiritually aware.",
+        "Avoid slang, parody, or flippant humor.",
+        "Use calm warmth and sincere goodwill.",
+    ],
+    "playful_modern": [
+        "Sound current, conversational, and lightly witty.",
+        "Use pop-culture cadence only when it feels natural.",
+        "Keep the copy crisp and avoid trying too hard to be trendy.",
+    ],
+    "minimal_heartfelt": [
+        "Keep the language clean, soft, and emotionally direct.",
+        "Prefer understated sincerity over decorative wording.",
+        "Let the emotional line land without extra explanation.",
+    ],
+}
+
+_ROMANTIC_HINTS = ("valentine", "romance", "romantic", "love", "crush", "date", "anniversary")
+_PLAYFUL_HINTS = ("netflix", "chill", "sofa", "couch", "quirky", "meme", "fun", "banter")
+_RESPECTFUL_FESTIVAL_HINTS = ("ramadan", "ramazan", "eid", "iftar", "dua", "blessing")
+_WARM_FESTIVAL_HINTS = ("diwali", "holi", "christmas", "pongal", "onam", "festival", "lights", "rangoli")
 
 
 def tone_direction(tone_funny_pct: int, tone_emotion_pct: int) -> str:
@@ -33,6 +66,75 @@ def cultural_context_guidance(cultural_context: str) -> str:
         "asian": "When relevant, keep restraint and subtle emotionality.",
     }
     return guidance.get(cultural_context, guidance["global"])
+
+
+def selected_voice_pack(payload: GenerateSingleRequest) -> str:
+    """Return the resolved voice pack for one request."""
+
+    brief = payload.creative_brief
+    if brief is not None and brief.voice_pack != "auto":
+        return brief.voice_pack
+
+    haystack = " ".join(
+        [
+            payload.theme_name,
+            payload.visual_style,
+            " ".join(payload.prompt_keywords),
+        ]
+    ).lower()
+
+    if any(token in haystack for token in _RESPECTFUL_FESTIVAL_HINTS):
+        return "festival_respectful"
+    if any(token in haystack for token in _ROMANTIC_HINTS):
+        return "romantic_witty" if payload.tone_funny_pct >= 35 else "minimal_heartfelt"
+    if any(token in haystack for token in _PLAYFUL_HINTS):
+        return "playful_modern"
+    if any(token in haystack for token in _WARM_FESTIVAL_HINTS):
+        return "festival_warm"
+    if payload.tone_funny_pct >= 60:
+        return "playful_modern"
+    if payload.tone_emotion_pct >= 65:
+        return "minimal_heartfelt"
+    return "festival_warm" if payload.app_id == "ecard_factory" else "minimal_heartfelt"
+
+
+def _format_tone_blend(brief: CreativeBrief | None) -> str | None:
+    """Render tone blend into one concise guideline line."""
+
+    if brief is None or not brief.tone_blend:
+        return None
+    parts = [f"{tone} {score}%" for tone, score in sorted(brief.tone_blend.items())]
+    return ", ".join(parts)
+
+
+def creative_brief_guidance(payload: GenerateSingleRequest) -> list[str]:
+    """Return creative-brief-specific guidance lines."""
+
+    brief = payload.creative_brief
+    voice_pack = selected_voice_pack(payload)
+    lines = [f"- Voice pack: {voice_pack}."]
+
+    for instruction in _VOICE_PACK_GUIDANCE.get(voice_pack, []):
+        lines.append(f"- {instruction}")
+
+    tone_blend = _format_tone_blend(brief)
+    if tone_blend:
+        lines.append(f"- Tone blend target: {tone_blend}.")
+
+    if brief is None:
+        return lines
+
+    if brief.audience_age_band:
+        lines.append(f"- Audience age band: {brief.audience_age_band}.")
+    if brief.cultural_guardrails:
+        lines.append(f"- Cultural guardrails: {', '.join(brief.cultural_guardrails)}.")
+    if brief.taboo_phrases:
+        lines.append(f"- Extra taboo phrases: {', '.join(brief.taboo_phrases)}.")
+    if brief.target_structure:
+        lines.append(f"- Creative target structure: {brief.target_structure}.")
+    if brief.desired_emotional_effect:
+        lines.append(f"- Desired emotional effect: {brief.desired_emotional_effect}.")
+    return lines
 
 
 def format_template(spec: OutputSpec) -> str:
@@ -135,11 +237,17 @@ def build_guidelines_prompt(payload: GenerateSingleRequest) -> str:
     if payload.avoid_cliches:
         banned = ", ".join(payload.avoid_phrases) if payload.avoid_phrases else "none provided"
         avoid_instruction = f"Avoid cliches and avoid these exact phrases: {banned}."
+    if payload.creative_brief is not None and payload.creative_brief.taboo_phrases:
+        extra_banned = ", ".join(payload.creative_brief.taboo_phrases)
+        avoid_instruction = f"{avoid_instruction} Also avoid these taboo phrases: {extra_banned}."
 
     length_lines = "\n".join(length_constraints(spec)) or "- No explicit length override."
+    brief_lines = "\n".join(creative_brief_guidance(payload))
 
     return (
         "GUIDELINES\n"
+        f"- App ID: {payload.app_id}\n"
+        f"- Content type: {payload.content_type}\n"
         f"- Tone direction: {tone_direction(payload.tone_funny_pct, payload.tone_emotion_pct)}\n"
         f"- Tone style: {payload.tone_style}\n"
         f"- Audience: {payload.audience}\n"
@@ -150,6 +258,8 @@ def build_guidelines_prompt(payload: GenerateSingleRequest) -> str:
         "- Keep cultural references natural.\n"
         f"- Emoji policy: {emoji_instruction}\n"
         f"- {avoid_instruction}\n"
+        "- Creative brief:\n"
+        f"{brief_lines}\n"
         "- Must not return JSON.\n"
         "- Must not prefix with 'Sure' or 'Here's'.\n"
         "- Format template:\n"
@@ -168,6 +278,7 @@ def build_user_prompt(payload: GenerateSingleRequest) -> str:
         f"Theme: {payload.theme_name}\n"
         f"Visual style: {payload.visual_style}\n"
         f"Keywords to include naturally when helpful: {keywords}\n"
+        "Prioritize originality, emotional believability, and clean completion.\n"
         "Output plain text only."
     )
 

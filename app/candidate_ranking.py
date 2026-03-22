@@ -22,6 +22,7 @@ from app.schemas import (
 TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
 MAX_SHORTLIST_CANDIDATES = 5
 LONG_FORM_FORMATS = {"paragraph", "one_page", "story"}
+DIVERSITY_BONUS_CAP = 3.0
 ABRUPT_ENDINGS = {
     "a",
     "an",
@@ -100,7 +101,8 @@ def build_ranked_candidates(
                 continue
 
             model_bonus = _model_rank_bonus(model_rank)
-            final_score = round(candidate_quality.total + model_bonus, 4)
+            diversity_bonus = _diversity_bonus(text)
+            final_score = round(candidate_quality.total + model_bonus + diversity_bonus, 4)
             preliminary.append(
                 {
                     "backend": result.backend,
@@ -108,6 +110,7 @@ def build_ranked_candidates(
                     "text": text,
                     "source_item_index": index,
                     "score": final_score,
+                    "diversity_bonus": diversity_bonus,
                     "model_score": model_score,
                     "model_rank": model_rank,
                     "quality": candidate_quality,
@@ -177,6 +180,8 @@ def _build_candidate_request(
         spec.structure.items = 1
 
     return GenerateSingleRequest(
+        app_id=payload.app_id,
+        content_type=payload.content_type,
         theme_name=payload.theme_name,
         tone_funny_pct=payload.tone_funny_pct,
         tone_emotion_pct=payload.tone_emotion_pct,
@@ -197,6 +202,7 @@ def _build_candidate_request(
         avoid_phrases=payload.avoid_phrases,
         output_format=payload.output_format,
         output_spec=spec,
+        creative_brief=payload.creative_brief.model_copy(deep=True) if payload.creative_brief is not None else None,
         trace_id=payload.trace_id,
         seed=payload.seed,
     )
@@ -309,6 +315,18 @@ def _model_rank_bonus(model_rank: int | None) -> float:
     if model_rank is None:
         return 0.0
     return max(0.0, round(3.0 - (model_rank * 0.75), 4))
+
+
+def _diversity_bonus(text: str) -> float:
+    """Return a small lexical-diversity bonus for shortlist ranking."""
+
+    tokens = [token.lower() for token in TOKEN_RE.findall(text)]
+    if len(tokens) < 5:
+        return 0.0
+    ratio = len(set(tokens)) / len(tokens)
+    if ratio < 0.55:
+        return 0.0
+    return round(min(DIVERSITY_BONUS_CAP, ratio * 2.5), 4)
 
 
 def _reason_codes_for_candidate(
