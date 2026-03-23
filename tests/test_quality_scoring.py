@@ -158,3 +158,31 @@ def test_incomplete_paragraph_is_invalid_for_winner_selection() -> None:
     assert is_valid is False
     assert quality.incomplete_ending_penalty > 0
     assert any(reason.startswith("Hard penalty:") for reason in quality.reasons)
+
+
+def test_short_greeting_closure_counts_as_complete_paragraph() -> None:
+    """Brief greeting-card closers like 'Happy birthday!' should not fail completeness."""
+
+    request = GenerateSingleRequest.model_validate(
+        base_payload(
+            output_spec={
+                "format": "paragraph",
+                "length": {"target_words": 24},
+                "structure": {"no_lists": True, "no_numbering": True},
+            }
+        )
+    )
+    output = GeneratedOutput(
+        items=[],
+        raw_text=(
+            "The day feels warmer when friends remember the little details that matter. "
+            "I hope this year brings calm, laughter, and gentle surprises your way. "
+            "Happy birthday!"
+        ),
+        structured_output=None,
+    )
+
+    quality, is_valid = score_quality(request, output)
+    assert is_valid is True
+    assert quality.incomplete_ending_penalty == 0
+    assert not any(reason.startswith("Hard penalty:") for reason in quality.reasons)

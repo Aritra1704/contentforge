@@ -318,10 +318,13 @@ async def test_generate_single_returns_request_id_header_and_meta(monkeypatch) -
     assert payload["meta"]["busy"] is False
     assert payload["meta"]["latency_ms"] >= 0
     assert payload["meta"]["applied_settings"] == {
+        "app_id": "ecard_factory",
+        "content_type": "ecard_message",
         "max_words": 16,
         "emoji_policy": "none",
         "tone_style": "conversational",
         "avoid_cliches": True,
+        "voice_pack": "minimal_heartfelt",
     }
     assert payload["errors"] is None
 
@@ -829,6 +832,42 @@ async def test_generate_single_accepts_length_only_miss_for_paragraph(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_generate_single_accepts_two_sentence_compact_paragraph(monkeypatch) -> None:
+    """Compact paragraph targets should allow short 2-sentence card-copy output."""
+
+    main_module, llm_module = reload_app(monkeypatch)
+    FakeAsyncClient.reset()
+    configure_default_payloads()
+    FakeAsyncClient.post_payloads["qwen2.5:7b-instruct"] = {
+        "message": {
+            "content": (
+                "Warm birthday wishes to you today. "
+                "May the day feel bright and kind."
+            )
+        }
+    }
+    monkeypatch.setattr(llm_module, "AsyncClient", FakeAsyncClient)
+
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/generate/single",
+            json=sample_payload(
+                output_spec={
+                    "format": "paragraph",
+                    "length": {"target_words": 18},
+                    "structure": {"no_lists": True, "no_numbering": True},
+                }
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["raw_text"] == "Warm birthday wishes to you today. May the day feel bright and kind."
+
+
+@pytest.mark.asyncio
 async def test_generate_single_returns_structured_output_for_pros_cons(monkeypatch) -> None:
     """Pros/cons format should return parsed structured_output sections."""
 
@@ -1109,6 +1148,55 @@ async def test_compare_models_returns_ranked_candidates_with_reasons_and_dedupes
     assert shortlist
     assert all(entry["reason_codes"] for entry in shortlist)
     assert all(entry["reason"] for entry in shortlist)
+
+
+@pytest.mark.asyncio
+async def test_compare_models_penalizes_large_target_word_drift(monkeypatch) -> None:
+    """Short paragraph targets should not let much longer candidates win the shortlist."""
+
+    main_module, llm_module = reload_app(monkeypatch)
+    FakeAsyncClient.reset()
+    configure_default_payloads()
+    FakeAsyncClient.post_payloads["qwen2.5:7b-instruct"] = {
+        "message": {
+            "content": (
+                "In Kolkata's warm embrace, may this special day bring you joy as steady as rain after summer heat and as bright as a table full of familiar laughter. "
+                "Friends and family hope the hours ahead feel generous, affectionate, and richly memorable from morning until the last candle fades."
+            )
+        }
+    }
+    FakeAsyncClient.post_payloads["mistral:7b"] = {
+        "message": {
+            "content": (
+                "Warm birthday wishes to you today. "
+                "May the day feel bright and calm."
+            )
+        }
+    }
+    monkeypatch.setattr(llm_module, "AsyncClient", FakeAsyncClient)
+
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/generate/compare-models",
+            json=compare_payload(
+                targets=[
+                    {"backend": "ollama", "model": "qwen2.5:7b-instruct"},
+                    {"backend": "ollama", "model": "mistral:7b"},
+                ],
+                output_spec={
+                    "format": "paragraph",
+                    "length": {"target_words": 18},
+                    "structure": {"no_lists": True, "no_numbering": True},
+                },
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["shortlist"]
+    assert payload["shortlist"][0]["model"] == "mistral:7b"
+    assert payload["shortlist"][0]["text"].startswith("Warm birthday wishes to you today.")
 
 
 @pytest.mark.asyncio

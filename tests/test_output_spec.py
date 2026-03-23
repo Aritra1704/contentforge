@@ -113,9 +113,27 @@ def test_explicit_output_spec_not_overridden_by_legacy_defaults() -> None:
 
     assert spec.format == "paragraph"
     assert spec.length.target_words == 90
-    assert spec.length.min_words == 60
+    assert spec.length.min_words == 63
     assert spec.length.max_words == 110
     assert spec.structure.items is None
+
+
+def test_explicit_short_paragraph_target_gets_tighter_bounds() -> None:
+    """Short paragraph targets should not inherit the old default long-form window."""
+
+    spec = normalize_output_spec(
+        {
+            "output_spec": {
+                "format": "paragraph",
+                "length": {"target_words": 18},
+            },
+        }
+    )
+
+    assert spec.format == "paragraph"
+    assert spec.length.target_words == 18
+    assert spec.length.min_words == 13
+    assert spec.length.max_words == 54
 
 
 def test_cultural_context_alias_normalization() -> None:

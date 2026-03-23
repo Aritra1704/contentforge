@@ -108,6 +108,31 @@ def _normalize_phrase(value: str) -> str:
     return " ".join(value.strip().split()).lower()
 
 
+def _memory_phrase_is_safe_blocker(
+    phrase: str,
+    *,
+    theme_name: str,
+    keywords: list[str],
+) -> bool:
+    """Return whether one memory-derived phrase is safe to promote into a hard blocker."""
+
+    normalized = _normalize_phrase(phrase)
+    if not normalized:
+        return False
+
+    tokens = [token for token in re.findall(r"[A-Za-z0-9']+", normalized) if token]
+    if len(tokens) < 3:
+        return False
+
+    protected_text = [_normalize_phrase(theme_name), *[_normalize_phrase(item) for item in keywords]]
+    for item in protected_text:
+        if not item:
+            continue
+        if normalized in item or item in normalized:
+            return False
+    return True
+
+
 def _extract_openings(lines: Iterable[str]) -> list[str]:
     """Extract two-word openings from generated lines."""
 
@@ -258,7 +283,16 @@ async def augment_avoid_phrases_with_memory(
     if not similar_runs:
         return
 
-    additions = derive_memory_avoid_phrases(similar_runs, cap=10)
+    payload_keywords = _payload_keywords(payload)
+    additions = [
+        phrase
+        for phrase in derive_memory_avoid_phrases(similar_runs, cap=10)
+        if _memory_phrase_is_safe_blocker(
+            phrase,
+            theme_name=payload.theme_name,
+            keywords=payload_keywords,
+        )
+    ]
     if not additions:
         return
 

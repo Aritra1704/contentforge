@@ -12,6 +12,7 @@ from app.schemas import (
     CompareModelResult,
     GenerateCompareModelsRequest,
     GenerateSingleRequest,
+    is_compact_paragraph_spec,
     JudgeResult,
     OutputSpec,
     ProsConsStructuredOutput,
@@ -102,7 +103,8 @@ def build_ranked_candidates(
 
             model_bonus = _model_rank_bonus(model_rank)
             diversity_bonus = _diversity_bonus(text)
-            final_score = round(candidate_quality.total + model_bonus + diversity_bonus, 4)
+            length_adjustment = _length_alignment_adjustment(candidate_request, text)
+            final_score = round(candidate_quality.total + model_bonus + diversity_bonus + length_adjustment, 4)
             preliminary.append(
                 {
                     "backend": result.backend,
@@ -111,6 +113,7 @@ def build_ranked_candidates(
                     "source_item_index": index,
                     "score": final_score,
                     "diversity_bonus": diversity_bonus,
+                    "length_adjustment": length_adjustment,
                     "model_score": model_score,
                     "model_rank": model_rank,
                     "quality": candidate_quality,
@@ -327,6 +330,43 @@ def _diversity_bonus(text: str) -> float:
     if ratio < 0.55:
         return 0.0
     return round(min(DIVERSITY_BONUS_CAP, ratio * 2.5), 4)
+
+
+def _length_alignment_adjustment(payload: GenerateSingleRequest, text: str) -> float:
+    """Return shortlist adjustment for strong target-word drift."""
+
+    spec = payload.output_spec or OutputSpec()
+    target_words = spec.length.target_words
+    if target_words is None or target_words <= 0:
+        return 0.0
+
+    total_words = len(TOKEN_RE.findall(text))
+    if total_words <= 0:
+        return -8.0
+
+    ratio = total_words / target_words
+    if is_compact_paragraph_spec(spec):
+        if 0.8 <= ratio <= 1.2:
+            return 3.0
+        if 0.65 <= ratio <= 1.4:
+            return 1.0
+        if 0.55 <= ratio <= 1.7:
+            return -2.5
+        if 0.45 <= ratio <= 2.1:
+            return -8.0
+        if 0.35 <= ratio <= 2.6:
+            return -14.0
+        return -20.0
+
+    if 0.7 <= ratio <= 1.35:
+        return 1.5
+    if 0.55 <= ratio <= 1.7:
+        return 0.0
+    if 0.45 <= ratio <= 2.1:
+        return -2.5
+    if 0.35 <= ratio <= 2.6:
+        return -5.0
+    return -8.0
 
 
 def _reason_codes_for_candidate(

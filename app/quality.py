@@ -14,6 +14,7 @@ from app.schemas import (
     OutputSpec,
     ProsConsStructuredOutput,
     QualityScore,
+    paragraph_sentence_bounds,
 )
 
 EMOJI_PATTERN = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]")
@@ -80,6 +81,11 @@ CLOSURE_HINTS = {
     "in the end",
     "at last",
     "with love",
+    "much love",
+    "warm wishes",
+    "best wishes",
+    "happy birthday",
+    "happy anniversary",
     "thank you",
     "forever",
     "together",
@@ -353,9 +359,13 @@ def task_fit_score(
             wrong_structure = True
             reasons.append("Hard penalty: paragraph format requires exactly one paragraph.")
         sentences = sentence_count(text)
-        if sentences < 3 or sentences > 6:
+        min_sentences, max_sentences = paragraph_sentence_bounds(spec)
+        if sentences < min_sentences or sentences > max_sentences:
             wrong_structure = True
-            reasons.append("Hard penalty: paragraph format requires 3-6 sentences.")
+            if min_sentences == max_sentences:
+                reasons.append(f"Hard penalty: paragraph format requires exactly {min_sentences} sentences.")
+            else:
+                reasons.append(f"Hard penalty: paragraph format requires {min_sentences}-{max_sentences} sentences.")
 
     elif spec.format == "one_page":
         paragraphs = paragraph_count(text)

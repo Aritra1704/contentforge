@@ -21,7 +21,13 @@ from app.errors import (
     ValidationServiceError,
 )
 from app.observability import sanitize_text
-from app.schemas import GenerateSingleRequest, OutputSpec, ProsConsStructuredOutput
+from app.schemas import (
+    GenerateSingleRequest,
+    OutputSpec,
+    ProsConsStructuredOutput,
+    is_compact_paragraph_spec,
+    paragraph_sentence_bounds,
+)
 from src.prompts.phrase_prompt import build_messages
 
 logger = logging.getLogger(__name__)
@@ -529,8 +535,11 @@ def validate_items(
     if spec.format == "paragraph":
         if output.raw_text is None:
             issues.append("insufficient_items")
-        elif sentence_count(output.raw_text) < 3 or sentence_count(output.raw_text) > 6:
-            issues.append("invalid_structure")
+        else:
+            min_sentences, max_sentences = paragraph_sentence_bounds(spec)
+            total_sentences = sentence_count(output.raw_text)
+            if total_sentences < min_sentences or total_sentences > max_sentences:
+                issues.append("invalid_structure")
 
     if spec.format == "one_page" and output.raw_text is not None:
         paragraph_total = paragraph_count(output.raw_text)
@@ -589,7 +598,10 @@ def build_retry_reminder(payload: GenerateSingleRequest, issues: list[str]) -> s
             f"Return verse with {output_item_floor(payload)} to {output_item_ceiling(payload)} lines."
         ]
     elif spec.format == "paragraph":
-        reminders = ["Return exactly one paragraph."]
+        if is_compact_paragraph_spec(spec):
+            reminders = ["Return exactly one short paragraph."]
+        else:
+            reminders = ["Return exactly one paragraph."]
     elif spec.format == "one_page":
         reminders = ["Return exactly one page-length response."]
     else:
@@ -603,7 +615,14 @@ def build_retry_reminder(payload: GenerateSingleRequest, issues: list[str]) -> s
         reminders.append("Do not omit items; satisfy the requested structure.")
     if "invalid_structure" in issues:
         if spec.format == "paragraph":
-            reminders.append("Return one plain-text paragraph with 3 to 6 sentences.")
+            min_sentences, max_sentences = paragraph_sentence_bounds(spec)
+            if min_sentences == max_sentences:
+                reminders.append(f"Return one plain-text paragraph with exactly {min_sentences} short sentences.")
+            else:
+                reminders.append(f"Return one plain-text paragraph with {min_sentences} to {max_sentences} sentences.")
+            if is_compact_paragraph_spec(spec):
+                reminders.append("Keep it compact enough for greeting-card copy, not a letter.")
+                reminders.append("Do not use a salutation, address line, or setup phrase before the message.")
         elif spec.format == "one_page":
             reminders.append("Return 2 to 4 short plain-text paragraphs.")
         elif spec.format == "story":

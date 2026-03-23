@@ -69,7 +69,7 @@ async def test_augment_avoid_phrases_with_memory_adds_history_phrases(monkeypatc
         assert limit == 5
         return [
             {
-                "detected_cliches": ["shine bright", "positive vibes", "you got this"],
+                "detected_cliches": ["hope this message", "shine bright", "same old sparkle", "warm wishes friend"],
                 "repetition_flags": ["wishing you", "start your"],
             }
         ]
@@ -79,6 +79,40 @@ async def test_augment_avoid_phrases_with_memory_adds_history_phrases(monkeypatc
 
     normalized = {item.lower() for item in request.avoid_phrases}
     assert "new week" in normalized
-    assert "shine bright" in normalized
-    assert "wishing you" in normalized
+    assert "hope this message" in normalized
+    assert "same old sparkle" in normalized
+    assert "shine bright" not in normalized
+    assert "wishing you" not in normalized
+    assert "warm wishes friend" not in normalized
     assert len(request.avoid_phrases) <= 11
+
+
+@pytest.mark.asyncio
+async def test_augment_avoid_phrases_with_memory_skips_prompt_overlap(monkeypatch) -> None:
+    """Memory phrases overlapping the prompt/theme should not become hard blockers."""
+
+    request = GenerateSingleRequest.model_validate(
+        base_payload(
+            theme_name="Warm Birthday Message",
+            prompt_keywords=["warm birthday message", "close friend"],
+        )
+    )
+
+    async def fake_fetch_similar_runs(theme_name: str, keywords: list[str], *, limit: int = 5):
+        assert theme_name == "Warm Birthday Message"
+        assert keywords == ["warm birthday message", "close friend"]
+        assert limit == 5
+        return [
+            {
+                "detected_cliches": ["warm birthday", "close friend note", "hope this message"],
+                "repetition_flags": [],
+            }
+        ]
+
+    monkeypatch.setattr(quality_memory, "fetch_similar_runs", fake_fetch_similar_runs)
+    await quality_memory.augment_avoid_phrases_with_memory(request)
+
+    normalized = {item.lower() for item in request.avoid_phrases}
+    assert "warm birthday" not in normalized
+    assert "close friend note" not in normalized
+    assert "hope this message" in normalized

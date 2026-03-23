@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from app.schemas import CreativeBrief, GenerateSingleRequest, OutputSpec
+from app.schemas import (
+    CreativeBrief,
+    GenerateSingleRequest,
+    OutputSpec,
+    is_compact_paragraph_spec,
+    paragraph_sentence_bounds,
+)
 
 _VOICE_PACK_GUIDANCE = {
     "romantic_witty": [
@@ -152,10 +158,19 @@ def format_template(spec: OutputSpec) -> str:
         )
 
     if spec.format == "paragraph":
+        min_sentences, max_sentences = paragraph_sentence_bounds(spec)
+        paragraph_label = "single short paragraph" if is_compact_paragraph_spec(spec) else "single paragraph"
+        card_copy_line = "- Think greeting-card copy, not a letter." if is_compact_paragraph_spec(spec) else ""
+        sentence_line = (
+            f"- Use exactly {min_sentences} short sentences."
+            if min_sentences == max_sentences
+            else f"- Use {min_sentences} to {max_sentences} sentences."
+        )
         return (
             "Template: paragraph\n"
-            "- Return a single paragraph.\n"
-            "- Use 3 to 6 sentences.\n"
+            f"- Return a {paragraph_label}.\n"
+            f"{sentence_line}\n"
+            f"{card_copy_line}\n"
             "- Plain text only."
         )
 
@@ -204,6 +219,8 @@ def length_constraints(spec: OutputSpec) -> list[str]:
         lines.append(f"- Maximum words: {spec.length.max_words}.")
     if spec.length.target_words is not None:
         lines.append(f"- Target words: {spec.length.target_words}.")
+    if is_compact_paragraph_spec(spec):
+        lines.append("- Keep the paragraph compact, display-ready, and free of letter-like buildup.")
     if spec.structure.max_words_per_line is not None:
         lines.append(f"- Max words per line: {spec.structure.max_words_per_line}.")
     return lines
@@ -273,12 +290,20 @@ def build_user_prompt(payload: GenerateSingleRequest) -> str:
     """Return task-level request data."""
 
     keywords = ", ".join(payload.prompt_keywords) if payload.prompt_keywords else "none"
+    short_copy_note = ""
+    spec = payload.output_spec or OutputSpec()
+    if payload.app_id == "ecard_factory" and is_compact_paragraph_spec(spec):
+        short_copy_note = (
+            "Write this as compact card copy: use exactly 2 short sentences when the target is very small, "
+            "skip salutations and address lines, and avoid letter-style buildup."
+        )
     return (
         "USER TASK\n"
         f"Theme: {payload.theme_name}\n"
         f"Visual style: {payload.visual_style}\n"
         f"Keywords to include naturally when helpful: {keywords}\n"
         "Prioritize originality, emotional believability, and clean completion.\n"
+        f"{short_copy_note}\n"
         "Output plain text only."
     )
 

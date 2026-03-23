@@ -251,6 +251,52 @@ def _merge_output_spec(spec: OutputSpec, defaults: OutputSpec) -> OutputSpec:
     return merged
 
 
+def _explicit_length_field(
+    raw_spec: OutputSpec | dict[str, Any] | None,
+    field_name: str,
+) -> bool:
+    """Return whether one length field was explicitly supplied by the caller."""
+
+    if raw_spec is None:
+        return False
+    if isinstance(raw_spec, OutputSpec):
+        if "length" not in raw_spec.model_fields_set:
+            return False
+        return field_name in raw_spec.length.model_fields_set
+    raw_length = raw_spec.get("length")
+    return isinstance(raw_length, dict) and field_name in raw_length
+
+
+def _derived_target_window(
+    format_name: OutputSpecFormat,
+    target_words: int,
+    *,
+    default_spec: OutputSpec,
+) -> tuple[int, int] | None:
+    """Return tighter min/max bounds when callers explicitly override long-form targets."""
+
+    target = max(1, int(target_words))
+    if format_name == "paragraph":
+        min_words = max(8, int(round(target * 0.7)))
+        max_words = max(min_words + 12, int(round(target * 3.0)))
+        if default_spec.length.max_words is not None:
+            max_words = min(max_words, default_spec.length.max_words)
+        return min_words, max_words
+    if format_name == "one_page":
+        min_words = max(60, int(round(target * 0.72)))
+        max_words = max(min_words + 40, int(round(target * 1.9)))
+        if default_spec.length.max_words is not None:
+            max_words = min(max_words, default_spec.length.max_words)
+        return min_words, max_words
+    if format_name == "story":
+        min_words = max(120, int(round(target * 0.75)))
+        max_words = max(min_words + 80, int(round(target * 1.7)))
+        if default_spec.length.max_words is not None:
+            max_words = min(max_words, default_spec.length.max_words)
+        return min_words, max_words
+    return None
+
+
 def normalize_output_spec(payload: BaseModel | dict[str, Any]) -> OutputSpec:
     """Build one normalized OutputSpec from new and legacy payload fields."""
 
@@ -281,9 +327,43 @@ def normalize_output_spec(payload: BaseModel | dict[str, Any]) -> OutputSpec:
         if legacy_output_format is not None and normalized.format == "one_liner":
             normalized.structure.no_numbering = legacy_output_format == "lines"
 
-    normalized = _merge_output_spec(normalized, _output_spec_defaults(normalized.format))
+    default_spec = _output_spec_defaults(normalized.format)
+    normalized = _merge_output_spec(normalized, default_spec)
+
+    explicit_target = _explicit_length_field(raw_spec, "target_words")
+    explicit_min = _explicit_length_field(raw_spec, "min_words")
+    explicit_max = _explicit_length_field(raw_spec, "max_words")
+    if explicit_target and normalized.length.target_words is not None:
+        target_window = _derived_target_window(
+            normalized.format,
+            normalized.length.target_words,
+            default_spec=default_spec,
+        )
+        if target_window is not None:
+            derived_min, derived_max = target_window
+            if not explicit_min:
+                normalized.length.min_words = derived_min
+            if not explicit_max:
+                normalized.length.max_words = derived_max
 
     return OutputSpec.model_validate(normalized.model_dump(mode="python", exclude_none=True))
+
+
+def is_compact_paragraph_spec(spec: OutputSpec) -> bool:
+    """Return whether one paragraph spec targets compact card-copy output."""
+
+    return spec.format == "paragraph" and int(spec.length.target_words or 0) <= 24 and int(spec.length.target_words or 0) > 0
+
+
+def paragraph_sentence_bounds(spec: OutputSpec) -> tuple[int, int]:
+    """Return the expected sentence-count bounds for one paragraph spec."""
+
+    target_words = int(spec.length.target_words or 0)
+    if spec.format == "paragraph" and 0 < target_words <= 18:
+        return 2, 2
+    if is_compact_paragraph_spec(spec):
+        return 2, 3
+    return 3, 6
 
 
 class GenerateSingleRequest(BaseModel):

@@ -67,6 +67,29 @@ def test_build_messages_includes_cultural_context_guidance() -> None:
     assert "Use cultural context only when relevant to the request." in user_prompt
 
 
+def test_build_messages_uses_compact_paragraph_guidance_for_short_card_copy() -> None:
+    """Short paragraph targets should render compact card-copy instructions."""
+
+    request = GenerateSingleRequest.model_validate(
+        base_payload(
+            app_id="ecard_factory",
+            content_type="ecard_message",
+            output_spec={
+                "format": "paragraph",
+                "length": {"target_words": 18},
+                "structure": {"no_lists": True, "no_numbering": True},
+            },
+        )
+    )
+    messages = build_messages(request)
+    user_prompt = messages[1]["content"]
+
+    assert "Return a single short paragraph." in user_prompt
+    assert "Use exactly 2 short sentences." in user_prompt
+    assert "Think greeting-card copy, not a letter." in user_prompt
+    assert "skip salutations and address lines" in user_prompt
+
+
 def test_build_messages_uses_creative_brief_voice_pack_and_guardrails() -> None:
     """Creative brief fields should flow into the rendered prompt."""
 
